@@ -1,5 +1,6 @@
 # Dependencies and generated application output
 node_modules/
+bun.lock
 out/
 dist/
 release/
