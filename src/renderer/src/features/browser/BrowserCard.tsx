@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentPresenceSnapshot,
+  BrowserCanvasFreezeFrameEvent,
   BrowserCanvasState,
   BrowserDownloadSnapshot,
   BrowserSnapshot,
   BrowserTabSnapshot,
+  BrowserViewportSurface,
   CameraState,
-  EdgePanSpeed,
   FocusActivation,
   LocaleId,
   Point,
@@ -15,8 +16,9 @@ import type {
 import { BROWSER_PROVIDER_COLORS } from "../../../../shared/contracts";
 import { UiIcon } from "../../components/UiIcon";
 import { t } from "../../lib/i18n";
-import { HOVER_FOCUS_DELAYS, shouldActivateCanvasFromClick } from "../workspace/focus";
+import { shouldActivateCanvasFromClick } from "../workspace/focus";
 import { snapMove, snapResize, type ResizeDirection } from "../workspace/snap";
+import { browserCanvasWidgetId } from "../workspace/canvasWidgetFocus";
 
 interface BrowserCardProps {
   browser: BrowserSnapshot;
@@ -27,16 +29,15 @@ interface BrowserCardProps {
   visible: boolean;
   snapEnabled: boolean;
   focusActivation: FocusActivation;
-  hoverFocus: boolean;
-  hoverFocusSpeed: EdgePanSpeed;
+  focused: boolean;
   selected: boolean;
-  zoomOverApplications: boolean;
   showAgentPresence: boolean;
   snapTargets: readonly SessionBounds[];
   onBoundsChange(bounds: BrowserCanvasState): void;
   onActivate(): void;
   onSelect(): void;
-  onDeselect(): void;
+  onWidgetFocus(): void;
+  onWidgetHoverChange(active: boolean): void;
   onClose(): void;
   onError(message: string): void;
 }
@@ -64,23 +65,21 @@ export function BrowserCard({
   visible,
   snapEnabled,
   focusActivation,
-  hoverFocus,
-  hoverFocusSpeed,
+  focused,
   selected,
-  zoomOverApplications,
   showAgentPresence,
   snapTargets,
   onBoundsChange,
   onActivate,
   onSelect,
-  onDeselect,
+  onWidgetFocus,
+  onWidgetHoverChange,
   onClose,
   onError
 }: BrowserCardProps): React.JSX.Element {
   const dragState = useRef<DragState | null>(null);
   const resizeState = useRef<ResizeState | null>(null);
   const viewport = useRef<HTMLDivElement>(null);
-  const hoverFocusTimer = useRef<number | null>(null);
   const addressFocused = useRef(false);
   const [position, setPosition] = useState(bounds.position);
   const [size, setSize] = useState(bounds.size);
@@ -89,6 +88,7 @@ export function BrowserCard({
   const [address, setAddress] = useState(activeTab?.url ?? "");
   const [panel, setPanel] = useState<BrowserPanel>(null);
   const [dialogPrompt, setDialogPrompt] = useState("");
+  const [freezeFrame, setFreezeFrame] = useState<BrowserCanvasFreezeFrameEvent | null>(null);
   const summaryMode = zoom < 0.5;
   const summaryScale = summaryMode ? Math.min(2.5, Math.max(1, 0.5 / zoom)) : 1;
   const activeAgents = useMemo(
@@ -109,6 +109,12 @@ export function BrowserCard({
     && browser.pendingDialog === null
     && !pageUnavailable
     && activeTab !== null;
+  const surface: BrowserViewportSurface = !visible ? "hidden" : nativeViewVisible ? "native" : "placeholder";
+  const freezeFrameVisible = freezeFrame?.active === true
+    && freezeFrame.tabId === activeTab?.id;
+  const freezeFrameDataUrl = freezeFrame && freezeFrame.tabId === activeTab?.id
+    ? freezeFrame.dataUrl
+    : null;
 
   useEffect(() => {
     liveBounds.current = bounds;
@@ -124,8 +130,8 @@ export function BrowserCard({
     setDialogPrompt(browser.pendingDialog?.defaultPrompt ?? "");
   }, [browser.pendingDialog?.defaultPrompt, browser.pendingDialog?.openedAt]);
 
-  const viewportState = useRef({ nativeViewVisible, zoom, zoomOverApplications, showAgentPresence });
-  viewportState.current = { nativeViewVisible, zoom, zoomOverApplications, showAgentPresence };
+  const viewportState = useRef({ surface, zoom, showAgentPresence });
+  viewportState.current = { surface, zoom, showAgentPresence };
 
   const reportViewport = useCallback((): void => {
     const element = viewport.current;
@@ -137,30 +143,15 @@ export function BrowserCard({
       y: rect.top,
       width: rect.width,
       height: rect.height,
-      visible: state.nativeViewVisible,
+      surface: state.surface,
       canvasScale: state.zoom,
-      captureCanvasWheel: state.zoomOverApplications,
       showAgentPresence: state.showAgentPresence
     });
   }, []);
 
   useLayoutEffect(() => {
-    if (nativeViewVisible) {
-      reportViewport();
-      return;
-    }
-    const rect = viewport.current?.getBoundingClientRect();
-    window.canvasTTY.browser.setViewport({
-      x: rect?.left ?? 0,
-      y: rect?.top ?? 0,
-      width: rect?.width ?? 0,
-      height: rect?.height ?? 0,
-      visible: false,
-      canvasScale: zoom,
-      captureCanvasWheel: zoomOverApplications,
-      showAgentPresence
-    });
-  }, [camera.x, camera.y, nativeViewVisible, position, reportViewport, showAgentPresence, size, zoom, zoomOverApplications]);
+    reportViewport();
+  }, [camera.x, camera.y, position, reportViewport, showAgentPresence, size, surface, zoom]);
 
   useLayoutEffect(() => {
     const element = viewport.current;
@@ -175,73 +166,55 @@ export function BrowserCard({
   }, [reportViewport]);
 
   useEffect(() => () => {
-    if (hoverFocusTimer.current !== null) window.clearTimeout(hoverFocusTimer.current);
     window.canvasTTY.browser.setViewport({
       x: 0,
       y: 0,
       width: 0,
       height: 0,
-      visible: false,
+      surface: "hidden",
       canvasScale: 1,
-      captureCanvasWheel: false,
       showAgentPresence: false
     });
   }, []);
 
-  const clearHoverFocusTimer = useCallback((): void => {
-    if (hoverFocusTimer.current === null) return;
-    window.clearTimeout(hoverFocusTimer.current);
-    hoverFocusTimer.current = null;
-  }, []);
+  useLayoutEffect(() => {
+    window.canvasTTY.browser.setInputFocused(focused);
+  }, [focused]);
 
-  const scheduleHoverFocus = useCallback((): void => {
-    clearHoverFocusTimer();
-    if (!hoverFocus || selected) return;
-    hoverFocusTimer.current = window.setTimeout(() => {
-      hoverFocusTimer.current = null;
-      onSelect();
-      window.canvasTTY.browser.focus();
-    }, HOVER_FOCUS_DELAYS[hoverFocusSpeed]);
-  }, [clearHoverFocusTimer, hoverFocus, hoverFocusSpeed, onSelect, selected]);
-
-  const scheduleHoverBlur = useCallback((): void => {
-    clearHoverFocusTimer();
-    if (!hoverFocus || !selected) return;
-    hoverFocusTimer.current = window.setTimeout(() => {
-      hoverFocusTimer.current = null;
-      onDeselect();
-    }, HOVER_FOCUS_DELAYS[hoverFocusSpeed]);
-  }, [clearHoverFocusTimer, hoverFocus, hoverFocusSpeed, onDeselect, selected]);
+  useEffect(() => () => window.canvasTTY.browser.setInputFocused(false), []);
 
   useEffect(() => window.canvasTTY.browser.onCanvasPointer((event) => {
     if (event.tabId !== browser.activeTabId) return;
     if (event.type === "enter") {
-      scheduleHoverFocus();
+      onWidgetHoverChange(true);
       return;
     }
     if (event.type === "leave") {
-      scheduleHoverBlur();
+      onWidgetHoverChange(false);
       return;
     }
     if (event.type === "down") {
-      clearHoverFocusTimer();
+      onWidgetFocus();
       onSelect();
       window.canvasTTY.browser.focus();
       return;
     }
     if (shouldActivateCanvasFromClick(focusActivation, event.clickCount)) onActivate();
-  }), [browser.activeTabId, clearHoverFocusTimer, focusActivation, onActivate, onSelect, scheduleHoverBlur, scheduleHoverFocus]);
+  }), [browser.activeTabId, focusActivation, onActivate, onSelect, onWidgetFocus, onWidgetHoverChange]);
+
+  useEffect(() => window.canvasTTY.browser.onCanvasFreezeFrame((event) => {
+    setFreezeFrame((current) => {
+      if (current && event.generation <= current.generation) return current;
+      const cachedDataUrl = current?.tabId === event.tabId ? current.dataUrl : null;
+      return { ...event, dataUrl: event.dataUrl ?? cachedDataUrl };
+    });
+  }), []);
 
   useEffect(() => {
-    if (hoverFocus) return;
-    clearHoverFocusTimer();
-  }, [clearHoverFocusTimer, hoverFocus]);
-
-  useEffect(() => {
-    if (!selected || !nativeViewVisible) return;
+    if (!focused || !nativeViewVisible) return;
     const frame = requestAnimationFrame(() => window.canvasTTY.browser.focus());
     return () => cancelAnimationFrame(frame);
-  }, [nativeViewVisible, selected]);
+  }, [focused, nativeViewVisible]);
 
   const startDrag = (event: React.PointerEvent<HTMLElement>): void => {
     if ((event.target as HTMLElement).closest("button, input, [data-browser-action]")) return;
@@ -384,15 +357,18 @@ export function BrowserCard({
     <article
       className={`browser-card ${summaryMode ? "browser-card--summary" : ""} ${selected ? "browser-card--selected" : ""}`}
       data-interactive="true"
+      data-canvas-widget-id={browserCanvasWidgetId}
+      data-canvas-widget-focusable="true"
       data-canvas-zoom-surface="application"
       data-wheel-owner={summaryMode ? undefined : "local"}
+      data-browser-canvas-wheel-owner={surface !== "native" || freezeFrameVisible ? "canvas" : undefined}
       tabIndex={-1}
       onPointerDownCapture={() => {
-        clearHoverFocusTimer();
+        onWidgetFocus();
         onSelect();
       }}
-      onPointerEnter={scheduleHoverFocus}
-      onPointerLeave={scheduleHoverBlur}
+      onPointerEnter={() => onWidgetHoverChange(true)}
+      onPointerLeave={() => onWidgetHoverChange(false)}
       onClick={activateCard}
       onDoubleClick={activateCardDouble}
       style={{
@@ -507,7 +483,21 @@ export function BrowserCard({
         </button>
       </nav>
 
-      <div ref={viewport} className="browser-card__viewport" />
+      <div
+        ref={viewport}
+        className="browser-card__viewport"
+        data-browser-canvas-wheel-owner={freezeFrameVisible ? "canvas" : undefined}
+      >
+        {freezeFrameDataUrl && (
+          <img
+            className="browser-card__freeze-frame"
+            src={freezeFrameDataUrl}
+            alt=""
+            aria-hidden="true"
+            draggable={false}
+          />
+        )}
+      </div>
 
       {!activeTab && (
         <div className="browser-card__page-state">
@@ -532,6 +522,7 @@ export function BrowserCard({
         onClick={activateSummary}
         onDoubleClick={activateSummaryDouble}
         data-focus-activation={focusActivation}
+        data-browser-canvas-wheel-owner="canvas"
         aria-label={t(locale, "browser")}
       >
         <span className="browser-card__summary-content">

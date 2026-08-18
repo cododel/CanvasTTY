@@ -17,6 +17,7 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve("src/preload/index.ts"),
+          browser: resolve("src/preload/browser.ts"),
           plugin: resolve("src/preload/plugin.ts")
         },
         output: {

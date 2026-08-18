@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   ZOOM_SENSITIVITY_FACTORS,
   wheelZoomFactor
-} from "../src/renderer/src/features/workspace/zoom.ts";
+} from "../src/shared/canvasNavigation.ts";
 
 test("normal sensitivity keeps the historical wheel step", () => {
   assert.ok(Math.abs(wheelZoomFactor(100, "normal") - Math.exp(-0.12)) < 1e-12);

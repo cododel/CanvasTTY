@@ -94,6 +94,7 @@ host.onStorageChange(listener) notifies every live contribution of the same plug
 | `limits:read` | `limits.get` | The same sanitized `LimitsSnapshot` used by HOME |
 | `launcher:open` | `launcher.open` | Opens the built-in provider Focus Card or terminal action; it does not bypass user launch choices |
 | `external:open` | `external.open` | Opens only an explicit HTTP(S) URL through the OS |
+| `browser:open` | `browser.open` | Opens only an explicit HTTP(S) URL in CanvasTTY's embedded Browser card and its shared browser session, including localhost |
 | `media:library` | `media.*` | User-selected music folders only; absolute paths are never exposed and audio is served through seekable `canvastty-media://` streams |
 | `playlists:read` | `playlists.list`, `playlists.read` | Reads `.m3u`, `.m3u8`, and `.pls` in a granted music folder plus `.json` under its `Playlists/` directory, up to 4 MB each |
 | `playlists:write` | `playlists.write` | Atomically writes a named playlist into the granted folder's `Playlists/` directory, up to 4 MB |
@@ -128,6 +129,7 @@ const restoredToken = await host.secrets.get("oauth-token");
 await host.request("launcher.open", { provider: "codex" });
 await host.canvas.open("notes");
 await host.request("window.open", { contributionId: "focus" });
+await host.request("browser.open", { url: "http://localhost:9210" });
 
 const library = await host.media.pickLibrary();
 if (library) {
@@ -140,7 +142,7 @@ if (library) {
 }
 ```
 
-Supported methods are `host.getContext`, `storage.*`, `secrets.*`, `sessions.list`, `limits.get`, `launcher.open`, `canvas.open`, `external.open`, `window.open`, `media.*`, and `playlists.*`. `canvas.open` opens or focuses a `canvas-app` contribution from the same plugin, placing it beside the requesting canvas card when possible. `window.open` may target only a `window` contribution declared by the same plugin.
+Supported methods are `host.getContext`, `storage.*`, `secrets.*`, `sessions.list`, `limits.get`, `launcher.open`, `canvas.open`, `external.open`, `browser.open`, `window.open`, `media.*`, and `playlists.*`. `canvas.open` opens or focuses a `canvas-app` contribution from the same plugin, placing it beside the requesting canvas card when possible. `browser.open` completes only after the workspace creates or focuses its Browser card and navigates it once; it accepts normalized HTTP(S) URLs only (not free-text searches, `file:`, `data:`, `javascript:`, `about:`, or credentialed URLs). `window.open` may target only a `window` contribution declared by the same plugin.
 
 Use `storage` for non-sensitive JSON preferences and `secrets` only for credentials such as OAuth tokens or API keys. Secrets are string-only, limited to 32 keys / 16 KB per value / 64 KB per plugin, removed on uninstall, and never fall back to plaintext storage. A secret call fails explicitly when the operating system cannot provide protected encryption.
 
@@ -154,7 +156,7 @@ A local-library player normally declares:
 "permissions": ["storage", "media:library", "playlists:read", "playlists:write"]
 ```
 
-Add `network` only for remote catalogs, radio, artwork, or streams, and `external:open` only for explicit links opened in the system browser. `storage` is intended for player preferences, favorites, queue state, and other small JSON metadata; audio files remain in user-selected folders.
+Add `network` only for remote catalogs, radio, artwork, or streams; add `external:open` only for explicit links opened in the system browser; and add `browser:open` only for explicit HTTP(S) pages intended for CanvasTTY's shared embedded browser. `storage` is intended for player preferences, favorites, queue state, and other small JSON metadata; audio files remain in user-selected folders.
 
 | SDK call | Result and intended use |
 |:--|:--|

@@ -41,6 +41,16 @@ const MAX_PACKAGE_BYTES = 25 * 1024 * 1024;
 const MAX_ASSET_BYTES = 8 * 1024 * 1024;
 const MAX_STORAGE_BYTES = 64 * 1024;
 const MAX_MANIFEST_BYTES = 128 * 1024;
+const PLUGIN_INPUT_BRIDGE_URL = "canvastty-plugin://host/input-bridge.js";
+
+export function injectPluginInputBridge(html: string): string {
+  if (html.includes(PLUGIN_INPUT_BRIDGE_URL)) return html;
+  const script = `<script src="${PLUGIN_INPUT_BRIDGE_URL}"></script>`;
+  const head = /<head(?:\s[^>]*)?>/i.exec(html);
+  if (!head || head.index === undefined) return `${script}${html}`;
+  const offset = head.index + head[0].length;
+  return `${html.slice(0, offset)}${script}${html.slice(offset)}`;
+}
 
 const PLUGIN_PERMISSIONS = new Set<PluginPermission>([
   "storage",
@@ -49,6 +59,7 @@ const PLUGIN_PERMISSIONS = new Set<PluginPermission>([
   "limits:read",
   "launcher:open",
   "external:open",
+  "browser:open",
   "media:library",
   "playlists:read",
   "playlists:write",
@@ -365,6 +376,12 @@ export class PluginManager {
           headers: resourceHeaders("application/javascript; charset=utf-8", false, false)
         });
       }
+      if (url.hostname === "host" && url.pathname === "/input-bridge.js") {
+        return new Response(PLUGIN_INPUT_BRIDGE_SOURCE, {
+          status: 200,
+          headers: resourceHeaders("application/javascript; charset=utf-8", false, false)
+        });
+      }
 
       const plugin = activePlugin(this.requireEnabledPlugin(url.hostname));
       const relativePath = decodeAssetPath(url.pathname);
@@ -373,7 +390,10 @@ export class PluginManager {
       const metadata = await stat(path);
       if (!metadata.isFile() || metadata.size > MAX_ASSET_BYTES) return response("Plugin asset is unavailable.", 404);
       const content = await readFile(path);
-      return new Response(content, {
+      const body = extname(path).toLowerCase() === ".html"
+        ? injectPluginInputBridge(content.toString("utf8"))
+        : content;
+      return new Response(body, {
         status: 200,
         headers: resourceHeaders(
           mimeType(path),
@@ -1337,4 +1357,43 @@ const PLUGIN_SDK_SOURCE = `(() => {
     }
   });
   addEventListener("DOMContentLoaded", () => post({ type: "ready" }), { once: true });
+})();`;
+
+const PLUGIN_INPUT_BRIDGE_SOURCE = `(() => {
+  if (parent === window) return;
+  let captureWheel = false;
+  addEventListener("message", (event) => {
+    const message = event.data;
+    if (event.source !== parent || !message || message.source !== "canvastty-host") return;
+    if (message.type === "canvas-input-policy") captureWheel = message.captureWheel === true;
+  });
+  addEventListener("wheel", (event) => {
+    if (!captureWheel) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    parent.postMessage({
+      source: "canvastty-plugin",
+      type: "canvas-wheel",
+      clientX: event.clientX,
+      clientY: event.clientY,
+      deltaX: event.deltaX,
+      deltaY: event.deltaY,
+      deltaMode: event.deltaMode,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      altKey: event.altKey,
+      shiftKey: event.shiftKey
+    }, "*");
+  }, { capture: true, passive: false });
+  addEventListener("pointerdown", () => {
+    parent.postMessage({ source: "canvastty-plugin", type: "canvas-focus" }, "*");
+  }, { capture: true });
+  addEventListener("pointerover", (event) => {
+    if (event.relatedTarget !== null) return;
+    parent.postMessage({ source: "canvastty-plugin", type: "canvas-hover", active: true }, "*");
+  }, { capture: true });
+  addEventListener("pointerout", (event) => {
+    if (event.relatedTarget !== null) return;
+    parent.postMessage({ source: "canvastty-plugin", type: "canvas-hover", active: false }, "*");
+  }, { capture: true });
 })();`;

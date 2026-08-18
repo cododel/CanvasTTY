@@ -94,6 +94,7 @@ host.onStorageChange(listener) сообщает всем открытым пов
 | `limits:read` | `limits.get` | Тот же очищенный `LimitsSnapshot`, который использует HOME |
 | `launcher:open` | `launcher.open` | Открывает штатную Focus Card или запуск терминала; не обходит пользовательский выбор |
 | `external:open` | `external.open` | Передаёт ОС только явную HTTP(S)-ссылку |
+| `browser:open` | `browser.open` | Открывает только явную HTTP(S)-ссылку во встроенной карточке Browser и её общей browser-сессии, включая localhost |
 | `media:library` | `media.*` | Только выбранные пользователем музыкальные папки; абсолютные пути не раскрываются, аудио отдаётся seekable-потоками `canvastty-media://` |
 | `playlists:read` | `playlists.list`, `playlists.read` | Читает `.m3u`, `.m3u8` и `.pls` в разрешённой музыкальной папке, а `.json` — только в её `Playlists/`, до 4 МБ на файл |
 | `playlists:write` | `playlists.write` | Атомарно записывает плейлист в каталог `Playlists/` разрешённой папки, до 4 МБ |
@@ -128,6 +129,7 @@ const restoredToken = await host.secrets.get("oauth-token");
 await host.request("launcher.open", { provider: "codex" });
 await host.canvas.open("notes");
 await host.request("window.open", { contributionId: "focus" });
+await host.request("browser.open", { url: "http://localhost:9210" });
 
 const library = await host.media.pickLibrary();
 if (library) {
@@ -140,7 +142,7 @@ if (library) {
 }
 ```
 
-Поддержаны `host.getContext`, `storage.*`, `secrets.*`, `sessions.list`, `limits.get`, `launcher.open`, `canvas.open`, `external.open`, `window.open`, `media.*` и `playlists.*`. `canvas.open` открывает или фокусирует `canvas-app` того же плагина и по возможности ставит его рядом с вызывающей карточкой. `window.open` может открыть только contribution типа `window` из того же manifest.
+Поддержаны `host.getContext`, `storage.*`, `secrets.*`, `sessions.list`, `limits.get`, `launcher.open`, `canvas.open`, `external.open`, `browser.open`, `window.open`, `media.*` и `playlists.*`. `canvas.open` открывает или фокусирует `canvas-app` того же плагина и по возможности ставит его рядом с вызывающей карточкой. `browser.open` завершается только после создания или фокусировки Browser-card workspace и одной навигации; принимаются лишь нормализованные HTTP(S)-URL, а не текст для поиска, `file:`, `data:`, `javascript:`, `about:` или URL с учётными данными. `window.open` может открыть только contribution типа `window` из того же manifest.
 
 Используйте `storage` для несекретных JSON-настроек, а `secrets` — только для OAuth-токенов, API-ключей и других учётных данных. Поддерживается до 32 строковых ключей, 16 КБ на значение и 64 КБ на плагин. Секреты удаляются при uninstall и никогда не сохраняются в plaintext; если ОС не предоставляет защищённое шифрование, вызов явно завершается ошибкой.
 
@@ -154,7 +156,7 @@ if (library) {
 "permissions": ["storage", "media:library", "playlists:read", "playlists:write"]
 ```
 
-Добавляйте `network` только для удалённых каталогов, радио, обложек или стримов, а `external:open` — только для явных ссылок, открываемых в системном браузере. `storage` предназначен для настроек плеера, избранного, очереди и небольших JSON-метаданных; сами аудиофайлы остаются в выбранных пользователем папках.
+Добавляйте `network` только для удалённых каталогов, радио, обложек или стримов; `external:open` — только для явных ссылок, открываемых в системном браузере; а `browser:open` — только для явных HTTP(S)-страниц, предназначенных для общей встроенной browser-сессии CanvasTTY. `storage` предназначен для настроек плеера, избранного, очереди и небольших JSON-метаданных; сами аудиофайлы остаются в выбранных пользователем папках.
 
 | Вызов SDK | Результат и назначение |
 |:--|:--|

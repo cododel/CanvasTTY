@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  displayCanvasNavigationBinding,
   matchesShortcut,
   shortcutFromKeyboardEvent
 } from "../src/renderer/src/lib/shortcuts.ts";
@@ -31,4 +32,9 @@ test("ignores modifier-only and unsupported keys", () => {
 test("matches shortcuts without casing drift", () => {
   assert.equal(matchesShortcut(keyEvent("h", { ctrlKey: true }), "Ctrl+H"), true);
   assert.equal(matchesShortcut(keyEvent("h", { ctrlKey: true }), "Alt+H"), false);
+});
+
+test("displays platform-neutral canvas navigation bindings with macOS key names", () => {
+  assert.equal(displayCanvasNavigationBinding("Ctrl+Alt+Meta+Space", true), "Ctrl+Option+Command+Space");
+  assert.equal(displayCanvasNavigationBinding("Ctrl+Alt", false), "Ctrl+Alt");
 });

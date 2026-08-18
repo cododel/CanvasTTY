@@ -33,16 +33,17 @@ The **YOLO** profile disables provider safety prompts where the provider support
 
 ## Terminal input and controls
 
-- Press any live terminal card to select it. The selected card receives xterm keyboard focus immediately, so typing is sent to its PTY without a second press inside the text area.
-- Press empty canvas to clear the selection, keyboard focus, and visible outline.
-- **Settings → Controls → Focus on hover** can select the terminal under the pointer and clear it after leaving. The same delay applies in both directions: slow `500ms`, normal `250ms`, or fast `80ms`. It is off by default.
-- Terminal scrolling and canvas zoom have independent wheel-direction settings. By default, wheel-down scrolls down in a live terminal, while canvas zoom keeps the original CanvasTTY direction.
+- Press any live terminal card to select and focus it. Input focus is independent from selection, so future multi-selection can keep one unambiguous keyboard and wheel target.
+- Click outside every widget to clear input focus. Clicking a decorative or action-only widget does not make it the wheel target.
+- **Settings → Controls → Focus on hover** moves input focus after the pointer rests on a focusable widget for slow `500ms`, normal `250ms`, or fast `80ms`. Leaving only cancels a pending transfer; assigned focus remains and selection is unchanged. It is off by default.
+- On a fresh profile, ordinary scroll over canvas, unfocused widgets, and non-focusable widgets pans on both axes; pinch and `Cmd/Ctrl + scroll` zoom around the pointer. A focused input widget keeps plain wheel/pinch in Off or released-Key mode. This includes a live Browser page, so it scrolls natively while focused; an unfocused Browser, On, an active Key binding, pinch, and `Cmd/Ctrl + scroll` route to the canvas. Browser summary/placeholder surfaces always route to the canvas. **Settings → Controls → Use scroll wheel to zoom** restores ordinary wheel zoom. Fresh profiles use Key with `Command` on macOS or `Ctrl` elsewhere. The separate full canvas navigation override defaults to `Option` on macOS and `Alt` elsewhere, accepts standalone Command/Ctrl, captures drag as well as wheel/pinch, and shows the hand cursor while held.
+- Terminal scrolling and canvas navigation have independent wheel-direction settings. Canvas inversion applies to both pan axes and to ordinary wheel zoom.
 - `Shift+Enter` sends a modified Enter sequence to insert a line break in compatible agent prompts without submitting. `Enter` keeps its normal PTY behavior.
 - With terminal text selected, `Ctrl+C`/`Ctrl+Shift+C` or `Cmd+C` copies it. Paste with `Ctrl+Shift+V`, `Cmd+V`, or `Shift+Insert`. Plain `Ctrl+C` without a selection remains the PTY interrupt.
 
 ## Browser controls and activity
 
-- The browser follows the same configured click-selection and hover-focus behavior as terminal cards. Clicking empty canvas clears the active application.
+- The browser follows the same independent selection and input-focus rules as terminal cards. Native page hover transfers focus after the configured delay; leaving the page does not clear it. In Off or released-Key mode, that focus also lets plain wheel scroll the live page. Pinch and `Cmd/Ctrl + scroll` still zoom the canvas. A page can also scroll through scrollbar drag, keyboard input, or site controls.
 - Use the trusted tab strip and navigation bar for HTTP(S) pages. Hiding the card preserves tabs; **Close all** removes them after confirmation.
 - **Settings → Browser** controls agent access and tab restore and shows recent downloads and command activity.
 - **Clear browser data** removes tabs, site data, cache, auth cache, staged uploads, and the current download list. It deliberately keeps the persistent redacted audit log.

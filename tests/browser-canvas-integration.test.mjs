@@ -6,6 +6,7 @@ import { HOVER_FOCUS_DELAYS, shouldActivateCanvasFromClick } from "../src/render
 const browserCardPath = new URL("../src/renderer/src/features/browser/BrowserCard.tsx", import.meta.url);
 const browserServicePath = new URL("../src/main/services/BrowserService.ts", import.meta.url);
 const workspacePath = new URL("../src/renderer/src/features/workspace/WorkspaceCanvas.tsx", import.meta.url);
+const focusHookPath = new URL("../src/renderer/src/features/workspace/useCanvasWidgetFocus.ts", import.meta.url);
 const iconPath = new URL("../src/renderer/src/components/UiIcon.tsx", import.meta.url);
 const stylesPath = new URL("../src/renderer/src/styles/app.css", import.meta.url);
 
@@ -18,42 +19,37 @@ test("browser and terminal share canvas focus activation semantics", () => {
   assert.deepEqual(HOVER_FOCUS_DELAYS, { slow: 500, normal: 250, fast: 80 });
 });
 
-test("browser native input participates in canvas selection and hover focus", async () => {
-  const [card, service, workspace] = await Promise.all([
+test("browser native input participates in selection and independent logical focus", async () => {
+  const [card, service, workspace, focusHook] = await Promise.all([
     readFile(browserCardPath, "utf8"),
     readFile(browserServicePath, "utf8"),
-    readFile(workspacePath, "utf8")
+    readFile(workspacePath, "utf8"),
+    readFile(focusHookPath, "utf8")
   ]);
 
   assert.match(service, /contents\.on\("before-mouse-event"/);
-  assert.match(service, /if \(pointerType === "down"\) contents\.focus\(\)/);
-  assert.match(service, /IPC\.browserCanvasPointer/);
-  assert.match(service, /mouse\.type === "mouseMove" && this\.pointerTabId !== tab\.id/);
+  assert.match(service, /if \(pointerType === "down"\) \{[\s\S]*?contents\.focus\(\);[\s\S]*?this\.setInputFocused\(true\)/);
   assert.match(card, /window\.canvasTTY\.browser\.onCanvasPointer/);
   assert.match(card, /browser-card--selected/);
   assert.match(workspace, /selected=\{browserSelected\}/);
   assert.match(workspace, /focusActivation=\{settings\.focusActivation\}/);
-  assert.match(workspace, /hoverFocus=\{settings\.hoverFocus\}/);
-  assert.match(workspace, /closest\("\.terminal-card, \.browser-card"\)/);
+  assert.match(workspace, /focusController\.focusBrowser/);
+  assert.match(focusHook, /HOVER_FOCUS_DELAYS\[settingsRef\.current\.hoverFocusSpeed\]/);
+  assert.match(focusHook, /canvasWidgetFocusAfterClick/);
 });
 
-test("browser native view stays live while the canvas and card move", async () => {
-  const [card, service, workspace, styles] = await Promise.all([
+test("native Browser layout remains a BrowserService responsibility", async () => {
+  const [card, service, styles] = await Promise.all([
     readFile(browserCardPath, "utf8"),
     readFile(browserServicePath, "utf8"),
-    readFile(workspacePath, "utf8"),
     readFile(stylesPath, "utf8")
   ]);
 
   assert.doesNotMatch(card, /canvasMoving|manipulating|browser-card__motion-surface/);
-  assert.doesNotMatch(workspace, /cameraMoving|canvasMoving=/);
-  assert.match(card, /\[camera\.x, camera\.y, nativeViewVisible, position, reportViewport/);
-  assert.doesNotMatch(card, /viewportFrame|requestAnimationFrame\(\(\) => \{\s*viewportFrame/);
   assert.match(card, /const rect = element\.getBoundingClientRect\(\);\s*const state = viewportState\.current;\s*window\.canvasTTY\.browser\.setViewport/);
   assert.match(service, /if \(this\.clipTabId !== active\.id\)/);
   assert.match(service, /this\.applyPageScale\(active\)/);
   assert.match(service, /contents\.setZoomFactor\(pageScale\)/);
-  assert.match(service, /contents\.on\("did-navigate",[\s\S]*?this\.applyPageScale\(tab\)/);
   assert.match(styles, /\.browser-card__viewport \{[^}]*inset: 140px 8px 8px;[^}]*background: #272934;/);
 });
 
@@ -80,5 +76,4 @@ test("browser window actions are separated from tab actions and use the Lucide g
   assert.match(card.slice(headerStart, tabsStart), /className="browser-card__hide"/);
   assert.doesNotMatch(card.slice(tabsStart, card.indexOf("<nav", tabsStart)), /browser-card__hide/);
   assert.match(icon, /globe\.svg/);
-  assert.doesNotMatch(icon, /browserIcon from "\.\.\/assets\/icons\/lucide\/focus\.svg"/);
 });

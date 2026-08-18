@@ -44,7 +44,10 @@ button { border: 0; }
   cursor: grab;
   isolation: isolate;
 }
-.workspace--panning { cursor: grabbing; }
+.workspace--canvas-override,
+.workspace--canvas-override * { cursor: grab !important; }
+.workspace--panning,
+.workspace--panning * { cursor: grabbing !important; }
 .workspace__scene { position: absolute; inset: 0; width: 1px; height: 1px; transform-origin: 0 0; will-change: transform; }
 .workspace__windows { position: absolute; left: 0; top: 0; }
 .workspace__windows--hidden { visibility: hidden; pointer-events: none; }
@@ -79,6 +82,7 @@ button { border: 0; }
 .plugin-widget { background: var(--surface); }
 .plugin-widget--unavailable { display: grid; place-items: center; padding: 18px; color: var(--text-muted-on-dark); font: 750 12px/1.4 var(--font-mono); overflow-wrap: anywhere; }
 .plugin-frame { width: 100%; height: 100%; display: block; border: 0; background: transparent; }
+.workspace--canvas-override .plugin-frame { pointer-events: none; }
 
 .mini-media { position: relative; color: white; background: var(--pink); isolation: isolate; }
 .mini-media--custom { background-color: var(--surface-soft); }
@@ -264,6 +268,7 @@ button { border: 0; }
 .browser-card__downloads--active .ui-icon { animation: browser-download 1.2s ease-in-out infinite alternate; }
 @keyframes browser-download { to { transform: translateY(4px); } }
 .browser-card__viewport { position: absolute; inset: 140px 8px 8px; overflow: hidden; background: #272934; }
+.browser-card__freeze-frame { width: 100%; height: 100%; display: block; object-fit: fill; pointer-events: none; user-select: none; }
 .browser-card__summary { position: absolute; inset: 54px 0 0; z-index: 10; width: 100%; height: calc(100% - 54px); display: none; align-items: center; justify-content: center; overflow: hidden; padding: 24px; color: white; background: #272934; cursor: zoom-in; }
 .browser-card__summary[data-focus-activation="off"] { cursor: pointer; }
 .browser-card__summary-content { width: var(--summary-content-width); max-width: calc(100% - 48px); display: flex; flex-direction: column; align-items: center; gap: 9px; transform: scale(var(--summary-scale, 1)); text-align: center; }
@@ -362,10 +367,15 @@ button { border: 0; }
 .shortcut-editor { display: grid; gap: 8px; }
 .shortcut-editor__row { min-height: 54px; padding: 8px 9px 8px 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; border-radius: 12px; background: rgba(255,255,255,.4); }
 .shortcut-editor__row > span { overflow: hidden; font-size: 13px; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
+.shortcut-editor__actions { display: flex; align-items: center; gap: 7px; }
 .shortcut-editor__key { min-width: 88px; min-height: 36px; padding: 7px 11px; border: 1px solid rgba(45,45,56,.12); border-radius: 9px; color: var(--text-dark); background: rgba(255,255,255,.58); cursor: pointer; font: 850 12px var(--font-mono); }
 .shortcut-editor__key:hover, .shortcut-editor__key--capturing { color: white; background: var(--surface); }
 .shortcut-editor__key--capturing { box-shadow: 0 0 0 3px color-mix(in srgb, var(--surface) 20%, transparent); }
+.shortcut-editor__clear { min-height: 36px; padding: 7px 10px; border: 1px solid rgba(45,45,56,.1); border-radius: 9px; color: var(--text-muted); background: rgba(255,255,255,.38); cursor: pointer; font: 800 11px var(--font-sans); }
+.shortcut-editor__clear:hover { color: var(--text-dark); background: rgba(255,255,255,.7); }
+.shortcut-editor__capture-hint { margin: 9px 2px 0; color: var(--text-muted); font-size: 12px; line-height: 1.35; }
 .shortcut-editor__error { margin: 9px 0 0; color: #8f3939; font-size: 12px; font-weight: 750; line-height: 1.35; }
+.shortcut-editor__warning { margin: 9px 0 0; color: #7b5b19; font-size: 12px; font-weight: 750; line-height: 1.35; }
 .setting-group__heading-row { margin-bottom: 9px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .setting-group__heading-row h3 { margin: 0; }
 .browser-settings__list { max-height: 248px; display: grid; gap: 7px; overflow-y: auto; scrollbar-gutter: stable; scrollbar-width: thin; }

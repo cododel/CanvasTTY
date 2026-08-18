@@ -36,15 +36,16 @@ test("terminal mouse coordinates are adapted for a transformed canvas", async ()
   const source = await readFile(terminalCardPath, "utf8");
 
   assert.match(source, /attachTerminalMouseCoordinateAdapter\(\s*screen/);
-  assert.match(source, /zoomOverApplicationsRef\.current/);
+  assert.match(source, /captureCanvasWheelRef\.current/);
   assert.match(source, /data-canvas-zoom-surface="application"/);
 });
 
-test("selecting a terminal moves keyboard focus into the live xterm", async () => {
+test("logical focus moves keyboard input independently of terminal selection", async () => {
   const source = await readFile(terminalCardPath, "utf8");
 
-  assert.match(source, /if \(selected && !renaming && !summaryMode\) terminal\.focus\(\)/);
-  assert.match(source, /else if \(!selected\) \{\s*terminal\.blur\(\)/);
+  assert.match(source, /if \(focused && !renaming && !summaryMode\) terminal\.focus\(\)/);
+  assert.match(source, /else if \(!focused\) \{\s*terminal\.blur\(\)/);
+  assert.match(source, /terminal-card--selected/);
 });
 
 test("terminal uses one block cursor instead of overlaying a bar on provider cursor cells", async () => {
@@ -57,8 +58,7 @@ test("terminal uses one block cursor instead of overlaying a bar on provider cur
 test("programmatic hover focus does not leak focus reports into the agent TUI", async () => {
   const source = await readFile(terminalCardPath, "utf8");
 
-  assert.match(source, /hoverFocusTransition\.current = "focus"/);
-  assert.match(source, /hoverFocusTransition\.current = "blur"/);
+  assert.match(source, /focusChangeSource === "hover"/);
   assert.match(source, /suppressFocusReport\.current/);
   assert.match(source, /TERMINAL_FOCUS_IN/);
   assert.match(source, /TERMINAL_FOCUS_OUT/);

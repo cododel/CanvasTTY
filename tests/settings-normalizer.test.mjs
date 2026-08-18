@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -20,7 +20,10 @@ const fallback = {
   edgePan: true,
   edgePanSpeed: "normal",
   zoomSensitivity: "normal",
-  zoomOverApplications: false,
+  canvasWheelCaptureMode: "key",
+  useScrollWheelToZoom: false,
+  canvasWheelOverride: "Meta",
+  canvasNavigationOverride: "Alt",
   focusActivation: "off",
   hoverFocus: false,
   hoverFocusSpeed: "normal",
@@ -50,7 +53,7 @@ test("keeps valid wheel, edge pan, zoom, and focus values", () => {
       edgePan: false,
       edgePanSpeed: "fast",
       zoomSensitivity: "slow",
-      zoomOverApplications: true,
+      canvasWheelCaptureMode: "always",
       hoverFocus: true,
       hoverFocusSpeed: "fast"
     },
@@ -61,7 +64,7 @@ test("keeps valid wheel, edge pan, zoom, and focus values", () => {
   assert.equal(normalized.edgePan, false);
   assert.equal(normalized.edgePanSpeed, "fast");
   assert.equal(normalized.zoomSensitivity, "slow");
-  assert.equal(normalized.zoomOverApplications, true);
+  assert.equal(normalized.canvasWheelCaptureMode, "always");
   assert.equal(normalized.hoverFocus, true);
   assert.equal(normalized.hoverFocusSpeed, "fast");
 });
@@ -74,7 +77,7 @@ test("falls back when edge pan and zoom values are garbage", () => {
   assert.equal(normalized.edgePan, fallback.edgePan);
   assert.equal(normalized.edgePanSpeed, fallback.edgePanSpeed);
   assert.equal(normalized.zoomSensitivity, fallback.zoomSensitivity);
-  assert.equal(normalized.zoomOverApplications, fallback.zoomOverApplications);
+  assert.equal(normalized.canvasWheelCaptureMode, fallback.canvasWheelCaptureMode);
   assert.equal(normalized.invertTerminalWheel, fallback.invertTerminalWheel);
   assert.equal(normalized.invertCanvasWheel, fallback.invertCanvasWheel);
   assert.equal(normalized.focusActivation, fallback.focusActivation);
@@ -91,7 +94,7 @@ test("older settings files without the new keys inherit defaults", () => {
   assert.equal(normalized.edgePan, fallback.edgePan);
   assert.equal(normalized.edgePanSpeed, fallback.edgePanSpeed);
   assert.equal(normalized.zoomSensitivity, fallback.zoomSensitivity);
-  assert.equal(normalized.zoomOverApplications, fallback.zoomOverApplications);
+  assert.equal(normalized.canvasWheelCaptureMode, fallback.canvasWheelCaptureMode);
   assert.equal(normalized.invertTerminalWheel, fallback.invertTerminalWheel);
   assert.equal(normalized.invertCanvasWheel, fallback.invertCanvasWheel);
   assert.equal(normalized.hoverFocus, fallback.hoverFocus);
@@ -103,7 +106,7 @@ test("a non-object candidate yields the fallback wholesale", () => {
   assert.equal(normalizeSettings("settings", fallback), fallback);
 });
 
-test("fresh installs keep edge automation off but allow escaping applications with canvas zoom", async () => {
+test("fresh installs default to scroll pan and key-gated widget wheel input", async () => {
   const dir = await mkdtemp(join(tmpdir(), "canvastty-settings-"));
   try {
     const store = new SettingsStore(dir, "en");
@@ -111,7 +114,10 @@ test("fresh installs keep edge automation off but allow escaping applications wi
     assert.equal(store.get().edgePan, false);
     assert.equal(store.get().edgePanSpeed, "normal");
     assert.equal(store.get().zoomSensitivity, "normal");
-    assert.equal(store.get().zoomOverApplications, true);
+    assert.equal(store.get().canvasWheelCaptureMode, "key");
+    assert.equal(store.get().useScrollWheelToZoom, false);
+    assert.equal(store.get().canvasWheelOverride, process.platform === "darwin" ? "Meta" : "Ctrl");
+    assert.equal(store.get().canvasNavigationOverride, "Alt");
     assert.equal(store.get().invertTerminalWheel, true);
     assert.equal(store.get().invertCanvasWheel, false);
     assert.equal(store.get().focusActivation, "off");
@@ -124,6 +130,165 @@ test("fresh installs keep edge automation off but allow escaping applications wi
     assert.equal(store.get().browserShowAgentPresence, true);
     assert.equal(store.get().browserRestoreTabs, true);
     assert.deepEqual(store.get().shortcuts, { home: "Home", renameWindow: "F2" });
+    const persisted = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
+    assert.equal(Object.hasOwn(persisted, "zoomOverApplications"), false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("fresh wheel capture binding follows the host platform", async () => {
+  const macDir = await mkdtemp(join(tmpdir(), "canvastty-settings-mac-wheel-"));
+  const otherDir = await mkdtemp(join(tmpdir(), "canvastty-settings-other-wheel-"));
+  try {
+    const mac = new SettingsStore(macDir, "en", "darwin");
+    const other = new SettingsStore(otherDir, "en", "linux");
+    await Promise.all([mac.load(), other.load()]);
+    assert.equal(mac.get().canvasWheelOverride, "Meta");
+    assert.equal(other.get().canvasWheelOverride, "Ctrl");
+  } finally {
+    await Promise.all([
+      rm(macDir, { recursive: true, force: true }),
+      rm(otherDir, { recursive: true, force: true })
+    ]);
+  }
+});
+
+test("existing settings migrate to wheel zoom and preserve legacy widget capture", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "canvastty-settings-migration-"));
+  try {
+    await writeFile(join(dir, "settings.json"), JSON.stringify({
+      locale: "en",
+      zoomOverApplications: false
+    }), "utf8");
+
+    const store = new SettingsStore(dir, "en");
+    const migrated = await store.load();
+    assert.equal(migrated.useScrollWheelToZoom, true);
+    assert.equal(migrated.canvasWheelCaptureMode, "off");
+    assert.equal(migrated.canvasNavigationOverride, "Alt");
+    assert.equal(migrated.canvasWheelOverride, null);
+
+    const persisted = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
+    assert.equal(persisted.useScrollWheelToZoom, true);
+    assert.equal(persisted.zoomOverApplications, false);
+    assert.equal(persisted.canvasNavigationOverride, "Alt");
+    assert.equal(persisted.canvasWheelOverride, null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("existing settings without the legacy key use key mode and keep the legacy key absent", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "canvastty-settings-legacy-wheel-"));
+  try {
+    await writeFile(join(dir, "settings.json"), JSON.stringify({ locale: "ru" }), "utf8");
+    const store = new SettingsStore(dir, "ru");
+    const migrated = await store.load();
+    assert.equal(migrated.useScrollWheelToZoom, true);
+    assert.equal(migrated.canvasWheelCaptureMode, "key");
+    assert.equal(migrated.canvasWheelOverride, process.platform === "darwin" ? "Meta" : "Ctrl");
+
+    const persisted = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
+    assert.equal(Object.hasOwn(persisted, "zoomOverApplications"), false);
+
+    await store.update({ palette: "night" });
+    const updated = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
+    assert.equal(Object.hasOwn(updated, "zoomOverApplications"), false);
+
+    await store.update({ canvasWheelCaptureMode: "always" });
+    const explicitlyEnabled = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
+    assert.equal(explicitlyEnabled.zoomOverApplications, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("migration preserves an explicitly enabled legacy widget capture value", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "canvastty-settings-legacy-wheel-enabled-"));
+  try {
+    await writeFile(join(dir, "settings.json"), JSON.stringify({
+      locale: "en",
+      zoomOverApplications: true
+    }), "utf8");
+
+    const store = new SettingsStore(dir, "en");
+    const migrated = await store.load();
+    assert.equal(migrated.canvasWheelCaptureMode, "always");
+
+    const persisted = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
+    assert.equal(persisted.zoomOverApplications, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("legacy false with a valid wheel binding migrates to key mode", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "canvastty-settings-legacy-wheel-key-"));
+  try {
+    await writeFile(join(dir, "settings.json"), JSON.stringify({
+      zoomOverApplications: false,
+      canvasWheelOverride: "Alt"
+    }), "utf8");
+    const store = new SettingsStore(dir, "en", "darwin");
+    const migrated = await store.load();
+    assert.equal(migrated.canvasWheelCaptureMode, "key");
+    assert.equal(migrated.canvasWheelOverride, "Alt");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("selecting Key without a saved binding assigns the platform default", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "canvastty-settings-wheel-key-default-"));
+  try {
+    await writeFile(join(dir, "settings.json"), JSON.stringify({
+      zoomOverApplications: false,
+      canvasWheelOverride: null
+    }), "utf8");
+    const store = new SettingsStore(dir, "en", "darwin");
+    await store.load();
+    assert.equal(store.get().canvasWheelCaptureMode, "off");
+    await store.update({ canvasWheelCaptureMode: "key" });
+    assert.equal(store.get().canvasWheelCaptureMode, "key");
+    assert.equal(store.get().canvasWheelOverride, "Meta");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("invalid explicit key mode fails closed without replacing action shortcuts", () => {
+  const normalized = normalizeSettings({
+    canvasWheelCaptureMode: "key",
+    canvasWheelOverride: "Meta+Space",
+    shortcuts: { home: "Meta+Space", renameWindow: "F2" }
+  }, fallback, "darwin");
+  assert.equal(normalized.canvasWheelCaptureMode, "off");
+  assert.equal(normalized.canvasWheelOverride, null);
+  assert.deepEqual(normalized.shortcuts, { home: "Meta+Space", renameWindow: "F2" });
+});
+
+test("mode changes persist the compatible legacy boolean and preserve the hidden binding", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "canvastty-settings-wheel-mode-"));
+  try {
+    const store = new SettingsStore(dir, "en", "darwin");
+    await store.load();
+    await store.update({ canvasWheelOverride: "Alt" });
+    await store.update({ canvasWheelCaptureMode: "off" });
+    assert.equal(store.get().canvasWheelOverride, "Alt");
+    let persisted = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
+    assert.equal(persisted.zoomOverApplications, false);
+
+    await store.update({ canvasWheelCaptureMode: "always" });
+    assert.equal(store.get().canvasWheelOverride, "Alt");
+    persisted = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
+    assert.equal(persisted.zoomOverApplications, true);
+
+    await store.update({ canvasWheelCaptureMode: "key" });
+    assert.equal(store.get().canvasWheelCaptureMode, "key");
+    assert.equal(store.get().canvasWheelOverride, "Alt");
+    persisted = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
+    assert.equal(persisted.zoomOverApplications, false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -200,6 +365,41 @@ test("conflicting or malformed shortcuts fall back together", () => {
     normalizeSettings({ shortcuts: { home: "???", renameWindow: "F2" } }, fallback).shortcuts,
     fallback.shortcuts
   );
+});
+
+test("normalization preserves action shortcuts and allows modifier-only navigation overrides", () => {
+  const conflict = normalizeSettings({
+    shortcuts: { home: "Alt+H", renameWindow: "F2" },
+    canvasNavigationOverride: "Alt"
+  }, fallback, "darwin");
+  assert.deepEqual(conflict.shortcuts, { home: "Alt+H", renameWindow: "F2" });
+  assert.equal(conflict.canvasNavigationOverride, "Alt");
+
+  const reserved = normalizeSettings({ canvasNavigationOverride: "Meta" }, fallback, "darwin");
+  assert.equal(reserved.canvasNavigationOverride, "Meta");
+  assert.equal(normalizeSettings({ canvasNavigationOverride: null }, fallback).canvasNavigationOverride, null);
+
+  const migratedConflict = normalizeSettings({
+    shortcuts: { home: "Alt+H", renameWindow: "F2" }
+  }, fallback, "darwin");
+  assert.deepEqual(migratedConflict.shortcuts, { home: "Alt+H", renameWindow: "F2" });
+  assert.equal(migratedConflict.canvasNavigationOverride, "Alt");
+});
+
+test("both overrides accept zoom modifiers without swallowing ordinary shortcuts", () => {
+  const normalized = normalizeSettings({
+    shortcuts: { home: "Meta+H", renameWindow: "F2" },
+    canvasWheelOverride: "Meta",
+    canvasNavigationOverride: "Meta"
+  }, fallback, "darwin");
+  assert.equal(normalized.canvasWheelOverride, "Meta");
+  assert.equal(normalized.canvasNavigationOverride, "Meta");
+
+  const conflictingChord = normalizeSettings({
+    shortcuts: { home: "Meta+Space", renameWindow: "F2" },
+    canvasWheelOverride: "Meta+Space"
+  }, fallback, "darwin");
+  assert.equal(conflictingChord.canvasWheelOverride, null);
 });
 
 test("a saved edge pan preference survives normalization", () => {

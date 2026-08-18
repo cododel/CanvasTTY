@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef } from "react";
 import type {
   AgentProviderId,
   AppSettings,
@@ -9,20 +9,27 @@ import type {
   HomeWidgetPlacement,
   InstalledPlugin,
   LimitsSnapshot,
-  Point,
   SessionBounds,
   SessionSnapshot
 } from "../../../../shared/contracts";
 import { HomeZone } from "../home/HomeZone";
-import { EDGE_PAN_SPEEDS, edgePanVelocity } from "./edgePan";
-import { wheelZoomFactor } from "./zoom";
 import { TerminalCard } from "../terminal/TerminalCard";
 import { PluginCanvasCard } from "../plugins/PluginCanvasCard";
 import { UiIcon } from "../../components/UiIcon";
 import { t } from "../../lib/i18n";
+import { displayCanvasNavigationBinding } from "../../lib/shortcuts";
 import type { LimitsLoadState } from "../home/homeModel";
 import { homeGridPixelSize, homeLayoutFitsGrid } from "../home/homeLayout";
 import { BrowserCard } from "../browser/BrowserCard";
+import {
+  browserCanvasWidgetId,
+  canvasWidgetTarget,
+  pluginCanvasWidgetId,
+  terminalCanvasWidgetId
+} from "./canvasWidgetFocus";
+import { useCanvasPointerNavigation } from "./useCanvasPointerNavigation";
+import { useCanvasWheelNavigation } from "./useCanvasWheelNavigation";
+import { useCanvasWidgetFocus } from "./useCanvasWidgetFocus";
 
 interface WorkspaceCanvasProps {
   settings: AppSettings;
@@ -48,8 +55,6 @@ interface WorkspaceCanvasProps {
   onSelectSession(id: string): void;
   onSelectBrowser(): void;
   onClearCanvasSelection(): void;
-  onDeselectSession(id: string): void;
-  onDeselectBrowser(): void;
   onRenameSession(id: string, title: string): Promise<void>;
   onRenameEnd(): void;
   onRequestMedia(): Promise<void>;
@@ -68,12 +73,6 @@ interface WorkspaceCanvasProps {
   onBrowserBoundsChange(bounds: BrowserCanvasState): void;
   onFocusBrowser(): void;
   onCloseBrowser(): void;
-}
-
-interface PanState {
-  pointerId: number;
-  startClient: Point;
-  startCamera: CameraState;
 }
 
 export function WorkspaceCanvas({
@@ -100,8 +99,6 @@ export function WorkspaceCanvas({
   onSelectSession,
   onSelectBrowser,
   onClearCanvasSelection,
-  onDeselectSession,
-  onDeselectBrowser,
   onRenameSession,
   onRenameEnd,
   onRequestMedia,
@@ -122,118 +119,48 @@ export function WorkspaceCanvas({
   onCloseBrowser
 }: WorkspaceCanvasProps): React.JSX.Element {
   const viewport = useRef<HTMLDivElement>(null);
-  const panState = useRef<PanState | null>(null);
-  const [panning, setPanning] = useState(false);
   const cameraRef = useRef(camera);
   cameraRef.current = camera;
-  const settingsRef = useRef(settings);
-  settingsRef.current = settings;
-  const edgePointer = useRef<Point | null>(null);
-  const edgeFrame = useRef<number | null>(null);
-  const edgeLastTime = useRef(0);
-
-  useEffect(() => () => {
-    if (edgeFrame.current !== null) cancelAnimationFrame(edgeFrame.current);
-  }, []);
-
-  const edgePanStep = (time: number): void => {
-    edgeFrame.current = null;
-    const pointer = edgePointer.current;
-    if (!pointer || panState.current || !settingsRef.current.edgePan) return;
-    const bounds = viewport.current?.getBoundingClientRect();
-    if (!bounds) return;
-    const hovered = document.elementFromPoint(pointer.x, pointer.y);
-    if (hovered?.closest('[data-interactive="true"]')) return;
-    const velocity = edgePanVelocity(pointer, bounds, {
-      maxSpeed: EDGE_PAN_SPEEDS[settingsRef.current.edgePanSpeed]
-    });
-    if (!velocity) return;
-    const dt = edgeLastTime.current === 0 ? 0 : Math.min(0.05, (time - edgeLastTime.current) / 1000);
-    edgeLastTime.current = time;
-    onCameraChange({
-      ...cameraRef.current,
-      x: cameraRef.current.x + velocity.x * dt,
-      y: cameraRef.current.y + velocity.y * dt
-    });
-    edgeFrame.current = requestAnimationFrame(edgePanStep);
-  };
-
-  const trackEdgePointer = (event: React.PointerEvent<HTMLDivElement>): void => {
-    if (!settings.edgePan) {
-      edgePointer.current = null;
-      return;
-    }
-    edgePointer.current = { x: event.clientX, y: event.clientY };
-    if (edgeFrame.current === null) {
-      edgeLastTime.current = 0;
-      edgeFrame.current = requestAnimationFrame(edgePanStep);
-    }
-  };
-
-  const startPan = (event: React.PointerEvent<HTMLDivElement>): void => {
-    if (event.button !== 0 || (event.target as HTMLElement).closest('[data-interactive="true"]')) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    panState.current = {
-      pointerId: event.pointerId,
-      startClient: { x: event.clientX, y: event.clientY },
-      startCamera: camera
-    };
-    setPanning(true);
-  };
-
-  const pan = (event: React.PointerEvent<HTMLDivElement>): void => {
-    const state = panState.current;
-    if (!state || state.pointerId !== event.pointerId) return;
-    onCameraChange({
-      ...camera,
-      x: state.startCamera.x + event.clientX - state.startClient.x,
-      y: state.startCamera.y + event.clientY - state.startClient.y
-    });
-  };
-
-  const endPan = (event: React.PointerEvent<HTMLDivElement>): void => {
-    if (panState.current?.pointerId !== event.pointerId) return;
-    panState.current = null;
-    setPanning(false);
-  };
-
-  const zoomAt = useCallback((clientX: number, clientY: number, nextZoom: number): void => {
-    const bounds = viewport.current?.getBoundingClientRect();
-    if (!bounds) return;
-    const currentCamera = cameraRef.current;
-    const localX = clientX - bounds.left;
-    const localY = clientY - bounds.top;
-    const worldX = (localX - currentCamera.x) / currentCamera.zoom;
-    const worldY = (localY - currentCamera.y) / currentCamera.zoom;
-    onCameraChange({
-      zoom: nextZoom,
-      x: localX - worldX * nextZoom,
-      y: localY - worldY * nextZoom
-    });
+  const commitCamera = useCallback((next: CameraState): void => {
+    cameraRef.current = next;
+    onCameraChange(next);
   }, [onCameraChange]);
 
-  const zoomFromWheel = useCallback((clientX: number, clientY: number, wheelDeltaY: number): void => {
-    const currentSettings = settingsRef.current;
-    const deltaY = currentSettings.invertCanvasWheel ? -wheelDeltaY : wheelDeltaY;
-    const nextZoom = clamp(
-      cameraRef.current.zoom * wheelZoomFactor(deltaY, currentSettings.zoomSensitivity),
-      0.2,
-      1.35
-    );
-    zoomAt(clientX, clientY, nextZoom);
-  }, [zoomAt]);
-
-  useEffect(() => window.canvasTTY.browser.onCanvasWheel((event) => {
-    if (!settingsRef.current.zoomOverApplications) return;
-    zoomFromWheel(event.clientX, event.clientY, event.deltaY);
-  }), [zoomFromWheel]);
-
-  const zoomBy = (factor: number): void => {
-    const bounds = viewport.current?.getBoundingClientRect();
-    if (!bounds) return;
-    const nextZoom = clamp(cameraRef.current.zoom * factor, 0.2, 1.35);
-    zoomAt(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2, nextZoom);
-  };
+  const focusController = useCanvasWidgetFocus({
+    viewport,
+    settings,
+    activeSessionId,
+    browserSelected,
+    widgetTreeVersion: [
+      browserViewVisible ? "browser-visible" : "browser-hidden",
+      settings.browserCanvas ? "browser-card" : "no-browser-card",
+      sessions.map((session) => session.id).join(","),
+      plugins.map((plugin) => [
+        plugin.manifest.id,
+        plugin.enabled ? "enabled" : "disabled",
+        plugin.manifest.contributions.map((contribution) => contribution.id).join(",")
+      ].join(":")).join(";"),
+      settings.pluginCanvas.map((instance) => instance.id).join(","),
+      settings.homeLayout.map((placement) => placement.widgetId).join(",")
+    ].join("|")
+  });
+  const wheelNavigation = useCanvasWheelNavigation({
+    viewport,
+    settings,
+    cameraRef,
+    widgetFocusRef: focusController.stateRef,
+    commitCamera
+  });
+  const pointerNavigation = useCanvasPointerNavigation({
+    viewport,
+    settings,
+    cameraRef,
+    canvasOverrideActiveRef: wheelNavigation.canvasOverrideActiveRef,
+    commitCamera
+  });
+  const widgetFocus = focusController.state;
+  const routeWidgetWheelToCanvas = wheelNavigation.routeWidgetWheelToCanvas;
+  const canvasOverrideActive = wheelNavigation.canvasOverrideActive;
 
   const homeBounds: SessionBounds = {
     position: { x: 0, y: 0 },
@@ -244,32 +171,26 @@ export function WorkspaceCanvas({
   return (
     <div
       ref={viewport}
-      className={`workspace pattern-${settings.pattern} ${panning ? "workspace--panning" : ""}`}
+      className={`workspace pattern-${settings.pattern} ${pointerNavigation.panning ? "workspace--panning" : ""} ${canvasOverrideActive ? "workspace--canvas-override" : ""}`}
       onPointerDownCapture={(event) => {
+        if (pointerNavigation.handlePointerDownCapture(event)) return;
+        const target = canvasWidgetTarget(event.target);
+        if (target.focusableWidgetId !== null) {
+          focusController.cancelHover();
+          focusController.focus(target.focusableWidgetId, "explicit");
+        }
         if (!(event.target as HTMLElement).closest(".terminal-card, .browser-card")) onClearCanvasSelection();
       }}
-      onPointerDown={startPan}
-      onPointerMove={(event) => {
-        pan(event);
-        trackEdgePointer(event);
+      onClickCapture={(event) => {
+        if (!pointerNavigation.handleClickCapture(event)) focusController.handleClick(event);
       }}
-      onPointerUp={endPan}
-      onPointerCancel={endPan}
-      onPointerLeave={() => {
-        edgePointer.current = null;
-      }}
-      onWheelCapture={(event) => {
-        if (!settings.zoomOverApplications || !isApplicationWheelTarget(event.target)) return;
-        event.preventDefault();
-        event.stopPropagation();
-        zoomFromWheel(event.clientX, event.clientY, event.deltaY);
-      }}
-      onWheel={(event) => {
-        if (settings.zoomOverApplications && isApplicationWheelTarget(event.target)) return;
-        if ((event.target as HTMLElement).closest('[data-wheel-owner="local"]')) return;
-        event.preventDefault();
-        zoomFromWheel(event.clientX, event.clientY, event.deltaY);
-      }}
+      onPointerOverCapture={focusController.handlePointerOver}
+      onPointerOutCapture={focusController.handlePointerOut}
+      onPointerDown={pointerNavigation.handlePointerDown}
+      onPointerMove={pointerNavigation.handlePointerMove}
+      onPointerUp={pointerNavigation.handlePointerEnd}
+      onPointerCancel={pointerNavigation.handlePointerEnd}
+      onPointerLeave={pointerNavigation.handlePointerLeave}
     >
       <div className="workspace__scene" style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})` }}>
         <HomeZone
@@ -283,13 +204,30 @@ export function WorkspaceCanvas({
           onOpenSettings={onOpenSettings}
           onOpenAgent={onOpenAgent}
           onOpenTerminal={onOpenTerminal}
-          onOpenBrowser={onOpenBrowser}
-          onFocusSession={onFocusSession}
+          onOpenBrowser={() => {
+            if (settings.browserCanvas) focusController.focusBrowser();
+            onOpenBrowser();
+          }}
+          onFocusSession={(session) => {
+            focusController.focus(terminalCanvasWidgetId(session.id), "explicit");
+            onFocusSession(session);
+          }}
           onRequestMedia={onRequestMedia}
           onRemoveMedia={onRemoveMedia}
           onLayoutChange={onHomeLayoutChange}
           onGridSizeChange={onHomeGridSizeChange}
           onPluginError={onPluginError}
+          captureCanvasWheelOverWidgets={routeWidgetWheelToCanvas}
+          focusedWidgetId={widgetFocus.id}
+          onWidgetFocus={(id) => {
+            focusController.cancelHover();
+            focusController.focus(id, "explicit");
+          }}
+          onWidgetHoverChange={(id, active) => {
+            if (active) focusController.scheduleHover(id);
+            else focusController.cancelHover(id);
+          }}
+          onPluginCanvasWheel={wheelNavigation.applyCanvasWheel}
         />
         <div
           className={`workspace__windows ${homeEditing ? "workspace__windows--hidden" : ""}`}
@@ -304,10 +242,10 @@ export function WorkspaceCanvas({
               zoom={camera.zoom}
               snapEnabled={settings.snapToGrid}
               focusActivation={settings.focusActivation}
-              hoverFocus={settings.hoverFocus}
-              hoverFocusSpeed={settings.hoverFocusSpeed}
               invertTerminalWheel={settings.invertTerminalWheel}
-              zoomOverApplications={settings.zoomOverApplications}
+              captureCanvasWheelOverWidgets={routeWidgetWheelToCanvas || widgetFocus.id !== terminalCanvasWidgetId(session.id)}
+              focused={widgetFocus.id === terminalCanvasWidgetId(session.id)}
+              focusChangeSource={widgetFocus.source}
               selected={activeSessionId === session.id}
               renaming={renamingSessionId === session.id}
               snapTargets={[
@@ -318,9 +256,11 @@ export function WorkspaceCanvas({
                 ...settings.pluginCanvas.map((candidate) => ({ position: candidate.position, size: candidate.size })),
                 ...(settings.browserCanvas ? [settings.browserCanvas] : [])
               ]}
-              onActivate={onFocusSession}
+              onActivate={(selectedSession) => {
+                focusController.focus(terminalCanvasWidgetId(selectedSession.id), "explicit");
+                onFocusSession(selectedSession);
+              }}
               onSelect={onSelectSession}
-              onDeselect={onDeselectSession}
               onRename={onRenameSession}
               onRenameEnd={onRenameEnd}
               onBoundsChange={onSessionBoundsChange}
@@ -352,11 +292,24 @@ export function WorkspaceCanvas({
                     .map((candidate) => ({ position: candidate.position, size: candidate.size })),
                   ...(settings.browserCanvas ? [settings.browserCanvas] : [])
                 ]}
-                onActivate={() => onFocusPluginCanvas(instance.id)}
+                onActivate={() => {
+                  focusController.focus(pluginCanvasWidgetId(instance.id), "explicit");
+                  onFocusPluginCanvas(instance.id);
+                }}
                 onBoundsChange={onPluginCanvasBoundsChange}
                 onDispose={onDisposePluginCanvas}
                 onOpenLauncher={(provider) => provider === "terminal" ? onOpenTerminal() : onOpenAgent(provider)}
                 onError={onPluginError}
+                captureCanvasWheelOverWidgets={routeWidgetWheelToCanvas || widgetFocus.id !== pluginCanvasWidgetId(instance.id)}
+                onWidgetFocus={() => {
+                  focusController.cancelHover();
+                  focusController.focus(pluginCanvasWidgetId(instance.id), "explicit");
+                }}
+                onWidgetHoverChange={(active) => {
+                  if (active) focusController.scheduleHover(pluginCanvasWidgetId(instance.id));
+                  else focusController.cancelHover(pluginCanvasWidgetId(instance.id));
+                }}
+                onCanvasWheel={wheelNavigation.applyCanvasWheel}
               />
             );
           })}
@@ -370,10 +323,8 @@ export function WorkspaceCanvas({
               visible={browserViewVisible && !homeEditing}
               snapEnabled={settings.snapToGrid}
               focusActivation={settings.focusActivation}
-              hoverFocus={settings.hoverFocus}
-              hoverFocusSpeed={settings.hoverFocusSpeed}
+              focused={widgetFocus.id === browserCanvasWidgetId}
               selected={browserSelected}
-              zoomOverApplications={settings.zoomOverApplications}
               showAgentPresence={settings.browserShowAgentPresence}
               snapTargets={[
                 homeBounds,
@@ -381,9 +332,13 @@ export function WorkspaceCanvas({
                 ...settings.pluginCanvas.map((candidate) => ({ position: candidate.position, size: candidate.size }))
               ]}
               onBoundsChange={onBrowserBoundsChange}
-              onActivate={onFocusBrowser}
+              onActivate={() => {
+                focusController.focusBrowser();
+                onFocusBrowser();
+              }}
               onSelect={onSelectBrowser}
-              onDeselect={onDeselectBrowser}
+              onWidgetFocus={focusController.focusBrowser}
+              onWidgetHoverChange={focusController.hoverBrowser}
               onClose={onCloseBrowser}
               onError={onPluginError}
             />
@@ -407,24 +362,33 @@ export function WorkspaceCanvas({
 
       <div className="canvas-controls" data-interactive="true">
         <button type="button" onClick={onGoHome} title={t(settings.locale, "home")}><UiIcon name="home" size={17} /></button>
-        <button type="button" onClick={() => zoomBy(0.82)} title={t(settings.locale, "zoomOut")}><UiIcon name="zoom-out" size={17} /></button>
-        <button type="button" onClick={() => zoomBy(1.22)} title={t(settings.locale, "zoomIn")}><UiIcon name="zoom-in" size={17} /></button>
+        <button type="button" onClick={() => wheelNavigation.zoomBy(0.82)} title={t(settings.locale, "zoomOut")}><UiIcon name="zoom-out" size={17} /></button>
+        <button type="button" onClick={() => wheelNavigation.zoomBy(1.22)} title={t(settings.locale, "zoomIn")}><UiIcon name="zoom-in" size={17} /></button>
       </div>
       {settings.showShortcutHints && (
         <aside className="shortcut-hints" aria-label={t(settings.locale, "keyboardShortcuts")}>
           <div><kbd>{settings.shortcuts.home}</kbd><span>{t(settings.locale, "homeShortcut")}</span></div>
           <div><kbd>{settings.shortcuts.renameWindow}</kbd><span>{t(settings.locale, "renameWindow")}</span></div>
+          {settings.canvasWheelCaptureMode === "key" && settings.canvasWheelOverride !== null && (
+            <div>
+              <kbd>{displayCanvasNavigationBinding(
+                settings.canvasWheelOverride,
+                window.canvasTTY.window.isMacOS
+              )}</kbd>
+              <span>{t(settings.locale, "canvasWheelOverrideHint")}</span>
+            </div>
+          )}
+          {settings.canvasNavigationOverride !== null && (
+            <div>
+              <kbd>{displayCanvasNavigationBinding(
+                settings.canvasNavigationOverride,
+                window.canvasTTY.window.isMacOS
+              )}</kbd>
+              <span>{t(settings.locale, "canvasNavigationOverrideHint")}</span>
+            </div>
+          )}
         </aside>
       )}
     </div>
   );
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function isApplicationWheelTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement
-    && target.closest('[data-canvas-zoom-surface="application"]') !== null;
 }

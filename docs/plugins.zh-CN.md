@@ -94,6 +94,7 @@ host.onStorageChange(listener) 会把 host.storage.set 的写入通知给同一�
 | `limits:read` | `limits.get` | 与 HOME 使用的同一个脱敏 `LimitsSnapshot` |
 | `launcher:open` | `launcher.open` | 打开内置服务商的 Focus Card 或终端动作；不会绕过用户的启动选择 |
 | `external:open` | `external.open` | 仅通过操作系统打开明确的 HTTP(S) URL |
+| `browser:open` | `browser.open` | 仅在 CanvasTTY 内置 Browser 卡片及其共享浏览器会话中打开明确的 HTTP(S) URL，包括 localhost |
 | `media:library` | `media.*` | 仅限用户选择的音乐文件夹；绝不暴露绝对路径，音频通过可 seek 的 `canvastty-media://` 流提供 |
 | `playlists:read` | `playlists.list`、`playlists.read` | 读取已授权音乐文件夹中的 `.m3u`、`.m3u8` 和 `.pls`，以及其 `Playlists/` 目录下的 `.json`，每个文件最大 4 MB |
 | `playlists:write` | `playlists.write` | 原子地写入一个命名播放列表到已授权文件夹的 `Playlists/` 目录，最大 4 MB |
@@ -128,6 +129,7 @@ const restoredToken = await host.secrets.get("oauth-token");
 await host.request("launcher.open", { provider: "codex" });
 await host.canvas.open("notes");
 await host.request("window.open", { contributionId: "focus" });
+await host.request("browser.open", { url: "http://localhost:9210" });
 
 const library = await host.media.pickLibrary();
 if (library) {
@@ -140,7 +142,7 @@ if (library) {
 }
 ```
 
-支持的方法有 `host.getContext`、`storage.*`、`secrets.*`、`sessions.list`、`limits.get`、`launcher.open`、`canvas.open`、`external.open`、`window.open`、`media.*` 和 `playlists.*`。`canvas.open` 会打开或聚焦同一插件的 `canvas-app`，并尽可能放在发起请求的画布卡片旁边。`window.open` 只能以同一个插件声明的 `window` 贡献为目标。
+支持的方法有 `host.getContext`、`storage.*`、`secrets.*`、`sessions.list`、`limits.get`、`launcher.open`、`canvas.open`、`external.open`、`browser.open`、`window.open`、`media.*` 和 `playlists.*`。`canvas.open` 会打开或聚焦同一插件的 `canvas-app`，并尽可能放在发起请求的画布卡片旁边。`browser.open` 仅在 workspace 创建或聚焦 Browser 卡片并完成一次导航后才会完成；它只接受规范化的 HTTP(S) URL，不接受自由文本搜索、`file:`、`data:`、`javascript:`、`about:` 或带凭据的 URL。`window.open` 只能以同一个插件声明的 `window` 贡献为目标。
 
 非敏感 JSON 偏好应使用 `storage`；OAuth 令牌、API 密钥等凭据应使用 `secrets`。每个插件最多保存 32 个字符串键，每个值最大 16 KB，总计最大 64 KB。卸载插件时会删除这些机密，并且绝不会退回明文存储；如果操作系统无法提供受保护的加密，调用会明确失败。
 
@@ -154,7 +156,7 @@ if (library) {
 "permissions": ["storage", "media:library", "playlists:read", "playlists:write"]
 ```
 
-仅在需要远程目录、电台、封面或流媒体时添加 `network`，仅在需要于系统浏览器中打开明确链接时添加 `external:open`。`storage` 用于播放器偏好、收藏、队列状态和其他小型 JSON 元数据；音频文件保留在用户选择的文件夹中。
+仅在需要远程目录、电台、封面或流媒体时添加 `network`；仅在需要于系统浏览器中打开明确链接时添加 `external:open`；仅在需要于 CanvasTTY 的共享内置浏览器中打开明确 HTTP(S) 页面时添加 `browser:open`。`storage` 用于播放器偏好、收藏、队列状态和其他小型 JSON 元数据；音频文件保留在用户选择的文件夹中。
 
 | SDK 调用 | 结果与预期用途 |
 |:--|:--|

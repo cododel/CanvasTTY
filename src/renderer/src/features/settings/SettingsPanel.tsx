@@ -6,6 +6,7 @@ import type {
   BrowserDownloadSnapshot,
   BrowserSnapshot,
   CanvasPatternId,
+  CanvasWheelCaptureMode,
   EdgePanSpeed,
   FocusActivation,
   InstalledPlugin,
@@ -18,11 +19,16 @@ import type {
   ZoomSensitivity
 } from "../../../../shared/contracts";
 import { BROWSER_PROVIDER_COLORS } from "../../../../shared/contracts";
+import {
+  canvasOverrideBindingConflicts,
+  defaultCanvasWheelBinding
+} from "../../../../shared/canvasNavigation";
 import { UiIcon } from "../../components/UiIcon";
 import { shortcutFromKeyboardEvent } from "../../lib/shortcuts";
 import { t } from "../../lib/i18n";
 import { PluginSettingsSection } from "../plugins/PluginSettingsSection";
 import { HomeAppearanceSettings } from "../home/HomeAppearanceSettings";
+import { CanvasNavigationShortcutEditor } from "./CanvasNavigationShortcutEditor";
 
 type SettingsSection = "general" | "appearance" | "controls" | "browser" | "plugins";
 
@@ -77,6 +83,12 @@ export function SettingsPanel({
       setBrowserDataMessage(null);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (section === "controls") return;
+    setShortcutError(null);
+    setCapturing(null);
+  }, [section]);
 
   useEffect(() => {
     if (!open || section !== "browser") return;
@@ -137,7 +149,12 @@ export function SettingsPanel({
     const conflict = Object.entries(settings.shortcuts).find(
       ([candidateAction, value]) => candidateAction !== action && value.toLowerCase() === shortcut.toLowerCase()
     );
-    if (conflict) {
+    const conflictsWithNavigation = settings.canvasNavigationOverride !== null
+      && canvasOverrideBindingConflicts(settings.canvasNavigationOverride, shortcut);
+    const conflictsWithWheel = settings.canvasWheelCaptureMode === "key"
+      && settings.canvasWheelOverride !== null
+      && canvasOverrideBindingConflicts(settings.canvasWheelOverride, shortcut);
+    if (conflict || conflictsWithNavigation || conflictsWithWheel) {
       setShortcutError(t(locale, "shortcutConflict"));
       return;
     }
@@ -146,6 +163,22 @@ export function SettingsPanel({
     await onChange({ shortcuts: { ...settings.shortcuts, [action]: shortcut } });
     setCapturing(null);
   };
+
+  const changeCanvasWheelCaptureMode = (mode: CanvasWheelCaptureMode): void => {
+    if (mode === "key" && settings.canvasWheelOverride === null) {
+      void onChange({
+        canvasWheelCaptureMode: mode,
+        canvasWheelOverride: defaultCanvasWheelBinding(window.canvasTTY.window.isMacOS ? "darwin" : "other")
+      });
+      return;
+    }
+    void onChange({ canvasWheelCaptureMode: mode });
+  };
+
+  const canvasOverrideBindingsMatch = settings.canvasWheelCaptureMode === "key"
+    && settings.canvasWheelOverride !== null
+    && settings.canvasNavigationOverride !== null
+    && settings.canvasWheelOverride === settings.canvasNavigationOverride;
 
   return (
     <div className={`settings-backdrop ${open ? "settings-backdrop--open" : ""}`} onMouseDown={(event) => {
@@ -267,13 +300,59 @@ export function SettingsPanel({
                 />
               </SettingGroup>
               <SettingGroup
-                label={t(locale, "zoomOverApplications")}
-                description={t(locale, "zoomOverApplicationsDescription")}
+                label={t(locale, "useScrollWheelToZoom")}
+                description={t(locale, "useScrollWheelToZoomDescription")}
               >
                 <Segmented
-                  value={settings.zoomOverApplications ? "on" : "off"}
+                  value={settings.useScrollWheelToZoom ? "on" : "off"}
                   options={[["on", t(locale, "on")], ["off", t(locale, "off")]]}
-                  onChange={(value) => void onChange({ zoomOverApplications: value === "on" })}
+                  onChange={(value) => void onChange({ useScrollWheelToZoom: value === "on" })}
+                />
+              </SettingGroup>
+              <SettingGroup
+                label={t(locale, "canvasWheelCapture")}
+                description={t(locale, "canvasWheelCaptureDescription")}
+              >
+                <Segmented
+                  value={settings.canvasWheelCaptureMode}
+                  options={[["off", "Off"], ["always", "On"], ["key", "Key"]]}
+                  onChange={(value) => changeCanvasWheelCaptureMode(value as CanvasWheelCaptureMode)}
+                />
+                {settings.canvasWheelCaptureMode === "key" && (
+                  <CanvasNavigationShortcutEditor
+                    open={open}
+                    locale={locale}
+                    label={t(locale, "canvasWheelOverride")}
+                    binding={settings.canvasWheelOverride}
+                    actionShortcuts={Object.values(settings.shortcuts)}
+                    allowDisable={false}
+                    onCaptureStart={() => {
+                      setCapturing(null);
+                      setShortcutError(null);
+                    }}
+                    onChange={(canvasWheelOverride) => onChange({ canvasWheelOverride })}
+                  />
+                )}
+                {canvasOverrideBindingsMatch && (
+                  <p className="shortcut-editor__warning">{t(locale, "canvasOverrideBindingsMatch")}</p>
+                )}
+              </SettingGroup>
+              <SettingGroup
+                label={t(locale, "canvasNavigationOverride")}
+                description={t(locale, "canvasNavigationOverrideDescription")}
+              >
+                <CanvasNavigationShortcutEditor
+                  open={open}
+                  locale={locale}
+                  label={t(locale, "canvasNavigationOverride")}
+                  binding={settings.canvasNavigationOverride}
+                  actionShortcuts={Object.values(settings.shortcuts)}
+                  allowDisable
+                  onCaptureStart={() => {
+                    setCapturing(null);
+                    setShortcutError(null);
+                  }}
+                  onChange={(canvasNavigationOverride) => onChange({ canvasNavigationOverride })}
                 />
               </SettingGroup>
               <SettingGroup label={t(locale, "terminalWheelDirection")}>

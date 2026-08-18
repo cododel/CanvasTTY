@@ -7,6 +7,9 @@ export function normalizeBrowserViewportBounds(value: unknown): BrowserViewportB
   if (!value || typeof value !== "object") return null;
   const bounds = value as BrowserViewportBounds;
   if (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)) return null;
+  if (bounds.surface !== "native" && bounds.surface !== "placeholder" && bounds.surface !== "hidden") {
+    return null;
+  }
 
   const width = Math.max(0, bounds.width);
   const height = Math.max(0, bounds.height);
@@ -23,9 +26,8 @@ export function normalizeBrowserViewportBounds(value: unknown): BrowserViewportB
     y: top,
     width: Math.max(0, right - left),
     height: Math.max(0, bottom - top),
-    visible: bounds.visible === true,
+    surface: bounds.surface,
     ...(canvasScale === undefined ? {} : { canvasScale }),
-    captureCanvasWheel: bounds.captureCanvasWheel === true,
     showAgentPresence: bounds.showAgentPresence === true
   };
 }

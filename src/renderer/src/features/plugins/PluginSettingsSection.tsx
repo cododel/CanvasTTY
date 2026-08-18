@@ -221,6 +221,7 @@ function permissionKey(permission: PluginPermission): TranslationKey {
     "limits:read": "permissionLimitsRead",
     "launcher:open": "permissionLauncherOpen",
     "external:open": "permissionExternalOpen",
+    "browser:open": "permissionBrowserOpen",
     "media:library": "permissionMediaLibrary",
     "playlists:read": "permissionPlaylistsRead",
     "playlists:write": "permissionPlaylistsWrite",

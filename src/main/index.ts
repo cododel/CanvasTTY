@@ -10,6 +10,8 @@ import { PluginManager } from "./services/PluginManager";
 import { PluginMediaService } from "./services/PluginMediaService";
 import { PluginSecretsService } from "./services/PluginSecretsService";
 import { BrowserService } from "./services/BrowserService";
+import { CanvasNavigationInputController } from "./services/CanvasNavigationOverride";
+import { activeCanvasWheelBinding } from "../shared/canvasNavigation";
 import { runBrowserElectronSmoke } from "./services/browser/BrowserElectronSmoke";
 import {
   runProviderElectronSmoke,
@@ -53,13 +55,6 @@ protocol.registerSchemesAsPrivileged([
   }
 ]);
 
-// macOS native occlusion can defer a child WebContentsView's CDP input ACK for
-// several seconds even when that view disables renderer background throttling.
-// Agent-controlled tabs must remain responsive while the canvas is covered.
-if (process.platform === "darwin") {
-  app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
-}
-
 let mainWindow: BrowserWindow | null = null;
 let terminalManager: TerminalManager | null = null;
 let limitsService: LimitsService | null = null;
@@ -67,6 +62,7 @@ let pluginManager: PluginManager | null = null;
 let pluginMediaService: PluginMediaService | null = null;
 let pluginSecretsService: PluginSecretsService | null = null;
 let browserService: BrowserService | null = null;
+let canvasNavigationInput: CanvasNavigationInputController | null = null;
 let agentGateway: AgentGateway | null = null;
 let agentBrowserBridge: AgentBrowserBridge | null = null;
 let agentBrowserHelper: StdioHelperLaunch | null = null;
@@ -102,6 +98,11 @@ async function createWindow(): Promise<BrowserWindow> {
     const currentUrl = window.webContents.getURL();
     if (currentUrl && url !== currentUrl) event.preventDefault();
   });
+  canvasNavigationInput?.attach(window.webContents);
+  window.on("blur", () => {
+    canvasNavigationInput?.reset();
+    browserService?.cancelCanvasNavigationGesture();
+  });
 
   await window.loadURL(startupPageUrl({ locale: app.getLocale(), isMacOS: process.platform === "darwin" }));
 
@@ -121,14 +122,34 @@ async function initializeServices(): Promise<void> {
   const settings = new SettingsStore(userDataPath, app.getLocale());
   await settings.load();
 
+  canvasNavigationInput = new CanvasNavigationInputController(
+    {
+      wheelBinding: activeCanvasWheelBinding(
+        settings.get().canvasWheelCaptureMode,
+        settings.get().canvasWheelOverride
+      ),
+      navigationBinding: settings.get().canvasNavigationOverride
+    },
+    (state) => {
+      browserService?.setCanvasNavigationActive(state.navigationActive);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(IPC.canvasNavigationOverrideState, state);
+      }
+    }
+  );
+  if (mainWindow && !mainWindow.isDestroyed()) canvasNavigationInput.attach(mainWindow.webContents);
+
   browserService = new BrowserService(() => mainWindow, {
     userDataPath,
     restoreTabs: settings.get().browserRestoreTabs,
+    canvasWheelCaptureMode: settings.get().canvasWheelCaptureMode,
+    canvasNavigationInput,
     ...(process.env.CANVASTTY_BROWSER_SMOKE_URL
       ? { downloadRoot: join(userDataPath, "browser-smoke-downloads") }
       : {})
   });
   await browserService.ready();
+  browserService.setCanvasNavigationActive(canvasNavigationInput.active);
 
   if (supportsAgentGatewayPlatform()) {
     const runtimeDirectory = join(userDataPath, "browser", "runtime");
@@ -197,6 +218,16 @@ async function initializeServices(): Promise<void> {
     applyBrowserSettings: (next) => {
       agentBrowserBridge?.setEnabled(next.browserAgentAccess);
       browserService?.setRestoreTabs(next.browserRestoreTabs);
+      browserService?.cancelCanvasNavigationGesture();
+      browserService?.setCanvasWheelCaptureMode(next.canvasWheelCaptureMode);
+      canvasNavigationInput?.setBindings({
+        wheelBinding: activeCanvasWheelBinding(next.canvasWheelCaptureMode, next.canvasWheelOverride),
+        navigationBinding: next.canvasNavigationOverride
+      });
+    },
+    setCanvasNavigationShortcutCapture: (active) => {
+      if (active) browserService?.cancelCanvasNavigationGesture();
+      canvasNavigationInput?.setShortcutCaptureActive(active);
     },
     openPluginWindow,
     closePluginWindows,

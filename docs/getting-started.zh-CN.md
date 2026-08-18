@@ -33,16 +33,17 @@ npm run dev
 
 ## 终端输入与控制
 
-- 点击任意实时终端卡片即可选中它。选中后，卡片立即获得 xterm 键盘焦点，因此无需再次点击文本区域，输入就会发送到对应 PTY。
-- 点击空白画布会清除选中状态、键盘焦点和可见边框。
-- **设置 → 控制 → 悬停时聚焦** 可以在指针停留后选中终端，并在指针离开后取消选中。进入和离开使用相同延迟：慢速 `500ms`、正常 `250ms`、快速 `80ms`。默认关闭。
-- 终端滚动与画布缩放的滚轮方向可以独立设置。默认情况下，滚轮向下会让实时终端向下滚动，画布缩放则保持 CanvasTTY 原有方向。
+- 点击任意实时终端卡片即可选中并聚焦它。Input focus 与 selection 相互独立，因此未来加入 multi-selection 后仍能保持唯一明确的 keyboard 与 wheel 目标。
+- 点击所有 widget 之外会清除 input focus。点击装饰性或仅执行 action 的 widget 不会让它成为 wheel 目标。
+- **设置 → 控制 → 悬停时聚焦** 会在延迟后转移 input focus：慢速 `500ms`、正常 `250ms`、快速 `80ms`。离开只会取消尚未触发的转移；已分配的 focus 会保留，selection 不变。默认关闭。
+- 新配置中，在 canvas、unfocused widget 和不可聚焦 widget 上的普通 scroll 会沿两个轴移动 canvas，pinch 与 `Cmd/Ctrl + scroll` 会以指针为中心缩放。Focused input widget 在 Off 或 Key 未按下时保留普通 wheel/pinch；这也适用于 live Browser page，因此获得 focus 后页面会原生滚动。Unfocused Browser、On、激活的 Key binding、pinch 与 `Cmd/Ctrl + scroll` 会交给 canvas。Browser summary/placeholder 始终交给 canvas。**设置 → 控制 → Use scroll wheel to zoom** 可恢复普通 wheel zoom。新配置默认使用 Key，在 macOS 为 `Command`，其他平台为 `Ctrl`。独立的完整 canvas navigation override 默认使用 `Option`/`Alt`，允许单独 Command/Ctrl，还会接管 drag，并在按住时显示手形 cursor。
+- 终端滚动与画布导航的滚轮方向可以独立设置。Canvas inversion 同时作用于两个 pan 轴和普通 wheel zoom。
 - `Shift+Enter` 会发送带修饰符的 Enter，在兼容的智能体 prompt 中插入换行而不提交；普通 `Enter` 保持原有 PTY 行为。
 - 选中终端文字后，使用 `Ctrl+C`/`Ctrl+Shift+C` 或 `Cmd+C` 复制；使用 `Ctrl+Shift+V`、`Cmd+V` 或 `Shift+Insert` 粘贴。没有选中文字时，普通 `Ctrl+C` 仍是 PTY 中断。
 
 ## 浏览器控制与活动
 
-- 浏览器与终端卡片遵循相同的点击选中和悬停聚焦设置。点击空白画布会清除活动应用。
+- Browser 与 Terminal card 遵循相同且相互独立的 selection 与 input-focus 规则。悬停 native page 会在配置的延迟后转移 focus；离开页面不会清除它。在 Off 或 Key 未按下时，该 focus 也允许普通 wheel 原生滚动 live page。Pinch 与 `Cmd/Ctrl + scroll` 仍会缩放 canvas。页面也可通过 scrollbar drag、键盘或站点控件滚动。
 - 使用可信标签栏与导航栏访问 HTTP(S) 页面。隐藏卡片会保留标签页；确认后使用 **全部关闭** 才会移除它们。
 - **设置 → 浏览器** 控制智能体访问和标签页恢复，并显示最近下载和命令活动。
 - **清除浏览器数据** 会删除标签页、网站数据、cache、auth cache、暂存上传和当前下载列表，但会刻意保留持久化脱敏审计日志。

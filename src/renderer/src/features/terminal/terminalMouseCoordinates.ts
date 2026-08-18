@@ -103,11 +103,11 @@ export function attachTerminalMouseCoordinateAdapter(
   };
 
   for (const type of MOUSE_EVENT_TYPES) ownerDocument.addEventListener(type, handleMouseEvent, true);
-  ownerDocument.addEventListener("wheel", handleWheelEvent, { capture: true, passive: false });
+  screen.addEventListener("wheel", handleWheelEvent, { capture: true, passive: false });
 
   return () => {
     for (const type of MOUSE_EVENT_TYPES) ownerDocument.removeEventListener(type, handleMouseEvent, true);
-    ownerDocument.removeEventListener("wheel", handleWheelEvent, true);
+    screen.removeEventListener("wheel", handleWheelEvent, true);
   };
 }
 

@@ -8,18 +8,16 @@ test("browser viewport expands fractional edges instead of exposing compositor g
     y: 20.6,
     width: 100.2,
     height: 50.1,
-    visible: true,
+    surface: "native",
     canvasScale: 0.92,
-    captureCanvasWheel: true,
     showAgentPresence: true
   }), {
     x: 10,
     y: 20,
     width: 101,
     height: 51,
-    visible: true,
+    surface: "native",
     canvasScale: 0.92,
-    captureCanvasWheel: true,
     showAgentPresence: true
   });
 });
@@ -32,15 +30,13 @@ test("browser viewport rejects invalid geometry and clamps negative sizes", () =
     y: 3.8,
     width: -20,
     height: -10,
-    visible: "yes",
-    captureCanvasWheel: 1
+    surface: "hidden"
   }), {
     x: -3,
     y: 3,
     width: 0,
     height: 0,
-    visible: false,
-    captureCanvasWheel: false,
+    surface: "hidden",
     showAgentPresence: false
   });
 });
@@ -51,7 +47,7 @@ test("browser viewport keeps page scaling inside Chromium's supported range", ()
     y: 0,
     width: 400,
     height: 300,
-    visible: false,
+    surface: "placeholder",
     canvasScale: 0.2
   })?.canvasScale, 0.5);
   assert.equal(normalizeBrowserViewportBounds({
@@ -59,7 +55,17 @@ test("browser viewport keeps page scaling inside Chromium's supported range", ()
     y: 0,
     width: 400,
     height: 300,
-    visible: true,
+    surface: "native",
     canvasScale: 8
   })?.canvasScale, 3);
+});
+
+test("browser viewport rejects invalid surface state", () => {
+  assert.equal(normalizeBrowserViewportBounds({
+    x: 0,
+    y: 0,
+    width: 400,
+    height: 300,
+    surface: "invalid"
+  }), null);
 });

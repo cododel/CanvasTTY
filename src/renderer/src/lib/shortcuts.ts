@@ -1,4 +1,8 @@
-const MODIFIER_KEYS = new Set(["Alt", "Control", "Meta", "Shift"]);
+import {
+  activeCanvasNavigationModifiers,
+  canvasNavigationModifierFromKey,
+  normalizeCanvasNavigationInputKey
+} from "../../../shared/canvasNavigation.ts";
 
 interface ShortcutEvent {
   key: string;
@@ -9,17 +13,11 @@ interface ShortcutEvent {
 }
 
 export function shortcutFromKeyboardEvent(event: ShortcutEvent): string | null {
-  if (MODIFIER_KEYS.has(event.key)) return null;
-  const key = normalizeKey(event.key);
+  if (canvasNavigationModifierFromKey(event.key) !== null) return null;
+  const key = normalizeCanvasNavigationInputKey(event.key);
   if (!key) return null;
 
-  return [
-    event.ctrlKey ? "Ctrl" : null,
-    event.altKey ? "Alt" : null,
-    event.shiftKey ? "Shift" : null,
-    event.metaKey ? "Meta" : null,
-    key
-  ].filter(Boolean).join("+");
+  return [...activeCanvasNavigationModifiers(event), key].join("+");
 }
 
 export function matchesShortcut(event: ShortcutEvent, shortcut: string): boolean {
@@ -34,13 +32,11 @@ export function isRenameInputTarget(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest('[data-terminal-rename="true"]'));
 }
 
-function normalizeKey(key: string): string | null {
-  if (key === " ") return "Space";
-  if (key.length === 1) return key.toUpperCase();
-  if (/^F(?:[1-9]|1\d|2[0-4])$/.test(key)) return key;
-  if (new Set([
-    "Home", "End", "PageUp", "PageDown", "Enter", "Escape", "Tab",
-    "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Delete", "Insert", "Backspace"
-  ]).has(key)) return key;
-  return null;
+export function displayCanvasNavigationBinding(binding: string, isMacOS: boolean): string {
+  if (!isMacOS) return binding;
+  return binding.split("+").map((part) => {
+    if (part === "Alt") return "Option";
+    if (part === "Meta") return "Command";
+    return part;
+  }).join("+");
 }

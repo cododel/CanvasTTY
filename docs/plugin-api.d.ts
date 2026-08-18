@@ -14,6 +14,7 @@ export interface CanvasTTYPluginHost {
   request(method: "launcher.open", params: { provider: "terminal" | "codex" | "claude" | "kimi" }): Promise<null>;
   request(method: "canvas.open", params: { contributionId: string }): Promise<null>;
   request(method: "external.open", params: { url: string }): Promise<null>;
+  request(method: "browser.open", params: { url: string }): Promise<null>;
   request(method: "window.open", params: { contributionId: string }): Promise<null>;
   request(method: "media.pickLibrary"): Promise<CanvasTTYPluginMediaLibrary | null>;
   request(method: "media.listLibraries"): Promise<CanvasTTYPluginMediaLibrary[]>;
@@ -59,7 +60,7 @@ export interface CanvasTTYPluginContext {
     id: string;
     name: string;
     version: string;
-    permissions: Array<"storage" | "secrets" | "sessions:read" | "limits:read" | "launcher:open" | "external:open" | "media:library" | "playlists:read" | "playlists:write" | "network">;
+    permissions: Array<"storage" | "secrets" | "sessions:read" | "limits:read" | "launcher:open" | "external:open" | "browser:open" | "media:library" | "playlists:read" | "playlists:write" | "network">;
     modules: string[];
   };
   contribution: {

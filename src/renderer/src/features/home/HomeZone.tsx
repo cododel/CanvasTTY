@@ -24,6 +24,7 @@ import { AGENT_PROVIDERS, PROVIDERS } from "../../lib/providers";
 import { sessionStatusIcon, sessionStatusLabel } from "../../lib/sessionStatus";
 import { HomeMediaWidget } from "./HomeMediaWidget";
 import { PluginFrame } from "../plugins/PluginFrame";
+import type { PluginCanvasWheelInput } from "../plugins/pluginInputBridge";
 import {
   HOME_GRID_COLUMN_STEP,
   HOME_GRID_ROW_STEP,
@@ -42,6 +43,7 @@ import {
   type HomeLimitRow,
   type LimitsLoadState
 } from "./homeModel";
+import { homeCanvasWidgetId } from "../workspace/canvasWidgetFocus";
 
 interface HomeZoneProps {
   settings: AppSettings;
@@ -61,6 +63,11 @@ interface HomeZoneProps {
   onLayoutChange(layout: HomeWidgetPlacement[]): void;
   onGridSizeChange(gridSize: HomeGridSize): void;
   onPluginError(message: string): void;
+  captureCanvasWheelOverWidgets: boolean;
+  focusedWidgetId: string | null;
+  onWidgetFocus(id: string): void;
+  onWidgetHoverChange(id: string, active: boolean): void;
+  onPluginCanvasWheel(event: PluginCanvasWheelInput): void;
 }
 
 interface LayoutPointerState {
@@ -98,7 +105,12 @@ export function HomeZone({
   onRemoveMedia,
   onLayoutChange,
   onGridSizeChange,
-  onPluginError
+  onPluginError,
+  captureCanvasWheelOverWidgets,
+  focusedWidgetId,
+  onWidgetFocus,
+  onWidgetHoverChange,
+  onPluginCanvasWheel
 }: HomeZoneProps): React.JSX.Element {
   const locale = settings.locale;
   const [now, setNow] = useState(() => new Date());
@@ -338,6 +350,7 @@ export function HomeZone({
       candidate.id === match?.[2] && candidate.kind === "home-widget"
     ));
     if (plugin && contribution) {
+      const canvasWidgetId = homeCanvasWidgetId(widgetId);
       return (
         <section className="tile plugin-widget">
           <PluginFrame
@@ -348,6 +361,10 @@ export function HomeZone({
             palette={settings.palette}
             sessions={sessions}
             limits={limits}
+            captureCanvasWheelOverWidgets={captureCanvasWheelOverWidgets || focusedWidgetId !== canvasWidgetId}
+            onCanvasWheel={onPluginCanvasWheel}
+            onFocus={() => onWidgetFocus(canvasWidgetId)}
+            onHoverChange={(active) => onWidgetHoverChange(canvasWidgetId, active)}
             onOpenLauncher={openPluginLauncher}
             onError={onPluginError}
           />
@@ -396,6 +413,8 @@ export function HomeZone({
           <div
             className={`home-widget-slot ${isInsideHome(placement, draftGridSize) ? "" : "home-widget-slot--outside"}`}
             data-interactive="true"
+            data-canvas-widget-id={homeCanvasWidgetId(placement.widgetId)}
+            data-canvas-widget-focusable={isFocusableHomeWidget(placement.widgetId, plugins) ? "true" : undefined}
             key={placement.widgetId}
             style={{
               left: placement.column * HOME_GRID_COLUMN_STEP,
@@ -434,6 +453,17 @@ export function HomeZone({
       })}
     </section>
   );
+}
+
+function isFocusableHomeWidget(widgetId: string, plugins: readonly InstalledPlugin[]): boolean {
+  if (widgetId === "core.sessions") return true;
+  if (!widgetId.startsWith("plugin:")) return false;
+  const [, pluginId, contributionId] = widgetId.split(":");
+  return plugins.some((plugin) => plugin.enabled
+    && plugin.manifest.id === pluginId
+    && plugin.manifest.contributions.some((contribution) => (
+      contribution.id === contributionId && contribution.kind === "home-widget"
+    )));
 }
 
 function ClockWidget({ locale, now }: { locale: LocaleId; now: Date }): React.JSX.Element {

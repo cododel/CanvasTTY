@@ -2,6 +2,12 @@
 
 [English](CHANGELOG.md) · [Русский](CHANGELOG.ru.md) · [简体中文](CHANGELOG.zh-CN.md)
 
+## 1.2.2
+
+- Reworked canvas navigation: two-axis scrolling now pans the canvas by default, while pinch and `Cmd/Ctrl+scroll` perform focal-point zoom; the legacy scroll-to-zoom profile remains available in Settings, preserving its direction and sensitivity.
+- Introduced logical widget input ownership: widgets capture the wheel after an explicit click or a configurable hover delay, keep focus until you click outside, and offer `Off / On / Key` capture modes; a separate hold binding temporarily captures full canvas navigation, including drag.
+- Preserved gesture continuity across native Browser surfaces: page-vs-canvas ownership latches for 250 ms of wheel inactivity, pinch and `Cmd/Ctrl+scroll` always zoom the canvas, and a focused Browser page keeps scrolling natively when capture is disabled.
+
 ## 1.2.1
 
 - Plugin canvas apps now open and refocus at native `1.0` scale, avoiding fractional-scale blur; their transparent iframe backdrop also removes the bright seam around rounded plugin windows.

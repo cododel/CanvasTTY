@@ -29,6 +29,8 @@ import { TitleBar } from "./components/TitleBar";
 import { Toast } from "./components/Toast";
 import { AgentLaunchDialog } from "./features/launcher/AgentLaunchDialog";
 import { SettingsPanel } from "./features/settings/SettingsPanel";
+import { persistSettingsUpdate } from "./features/settings/persistSettings";
+import { PluginBrowserOpenQueue } from "./features/plugins/PluginBrowserOpenQueue";
 import { WorkspaceCanvas } from "./features/workspace/WorkspaceCanvas";
 import type { LimitsLoadState } from "./features/home/homeModel";
 import { t } from "./lib/i18n";
@@ -50,7 +52,10 @@ const FALLBACK_SETTINGS: AppSettings = {
   edgePan: false,
   edgePanSpeed: "normal",
   zoomSensitivity: "normal",
-  zoomOverApplications: true,
+  useScrollWheelToZoom: false,
+  canvasWheelCaptureMode: "key",
+  canvasWheelOverride: window.canvasTTY.window.isMacOS ? "Meta" : "Ctrl",
+  canvasNavigationOverride: "Alt",
   focusActivation: "off",
   hoverFocus: false,
   hoverFocusSpeed: "normal",
@@ -91,6 +96,8 @@ export function App(): React.JSX.Element {
   const [browser, setBrowser] = useState<BrowserSnapshot>(EMPTY_BROWSER_SNAPSHOT);
   const [camera, setCamera] = useState<CameraState>(() => homeCamera(DEFAULT_HOME_GRID_SIZE));
   const isHomeCamera = useRef(true);
+  const browserCanvasRef = useRef<BrowserCanvasState | null>(null);
+  const pluginBrowserOpenQueueRef = useRef(new PluginBrowserOpenQueue());
   const [launchProvider, setLaunchProvider] = useState<AgentProviderId | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [homeEditDraft, setHomeEditDraft] = useState<HomeEditDraft | null>(null);
@@ -106,6 +113,10 @@ export function App(): React.JSX.Element {
   });
 
   const showToast = useCallback((message: string): void => setToast(message), []);
+
+  useEffect(() => {
+    browserCanvasRef.current = settings.browserCanvas;
+  }, [settings.browserCanvas]);
 
   useEffect(() => {
     if (!toast) return;
@@ -210,14 +221,21 @@ export function App(): React.JSX.Element {
     return () => window.removeEventListener("resize", recenterHome);
   }, [settings.homeGridSize]);
 
+  const persistSettings = useCallback(async (patch: Partial<AppSettings>): Promise<void> => {
+    await persistSettingsUpdate(
+      (nextPatch) => window.canvasTTY.settings.update(nextPatch),
+      (updated) => setSettings(updated),
+      patch
+    );
+  }, []);
+
   const saveSettings = useCallback(async (patch: Partial<AppSettings>): Promise<void> => {
     try {
-      const updated = await window.canvasTTY.settings.update(patch);
-      setSettings(updated);
+      await persistSettings(patch);
     } catch {
       showToast(t(settings.locale, "settingsFailed"));
     }
-  }, [settings.locale, showToast]);
+  }, [persistSettings, settings.locale, showToast]);
 
   const createSession = useCallback(async (
     provider: ProviderId,
@@ -312,6 +330,7 @@ export function App(): React.JSX.Element {
   }, [saveSettings, settings.pluginCanvas]);
 
   const changeBrowserBounds = useCallback((browserCanvas: BrowserCanvasState): void => {
+    browserCanvasRef.current = browserCanvas;
     setSettings((current) => ({ ...current, browserCanvas }));
     void saveSettings({ browserCanvas });
   }, [saveSettings]);
@@ -329,39 +348,61 @@ export function App(): React.JSX.Element {
     setCamera(focusCamera(instance.position, instance.size, PLUGIN_CANVAS_FOCUS_ZOOM));
   }, [settings.pluginCanvas]);
 
-  const openBrowser = useCallback(async (): Promise<void> => {
-    try {
-      const browserApi = window.canvasTTY.browser;
-      if (!browserApi) {
-        showToast(t(settings.locale, "browserRestartRequired"));
-        return;
+  const openBrowser = useCallback(async (url?: string): Promise<void> => {
+    const browserApi = window.canvasTTY.browser;
+    if (!browserApi) throw new Error(t(settings.locale, "browserRestartRequired"));
+    const existingBrowserCanvas = browserCanvasRef.current;
+    const homeSize = homeGridPixelSize(settings.homeGridSize);
+    const browserCanvas = existingBrowserCanvas ?? {
+      position: {
+        x: homeSize.width + 160 + ((sessions.length + settings.pluginCanvas.length) % 2) * 760,
+        y: Math.floor((sessions.length + settings.pluginCanvas.length) / 2) * 500 + 20
+      },
+      size: { width: 920, height: 620 }
+    };
+    const snapshot = await browserApi.open(url);
+    setBrowser(snapshot);
+    if (!existingBrowserCanvas) {
+      browserCanvasRef.current = browserCanvas;
+      try {
+        await persistSettings({ browserCanvas });
+      } catch (error) {
+        browserCanvasRef.current = existingBrowserCanvas;
+        throw error;
       }
-      const homeSize = homeGridPixelSize(settings.homeGridSize);
-      const browserCanvas = settings.browserCanvas ?? {
-        position: {
-          x: homeSize.width + 160 + ((sessions.length + settings.pluginCanvas.length) % 2) * 760,
-          y: Math.floor((sessions.length + settings.pluginCanvas.length) / 2) * 500 + 20
-        },
-        size: { width: 920, height: 620 }
-      };
-      const snapshot = await browserApi.open();
-      setBrowser(snapshot);
-      if (!settings.browserCanvas) await saveSettings({ browserCanvas });
-      setSettingsOpen(false);
-      setActiveSessionId(null);
-      setBrowserSelected(true);
-      isHomeCamera.current = false;
-      setCamera(focusCamera(browserCanvas.position, browserCanvas.size));
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : t(settings.locale, "browserActionFailed"));
     }
-  }, [saveSettings, sessions.length, settings.browserCanvas, settings.homeGridSize, settings.locale, settings.pluginCanvas.length, showToast]);
+    setSettingsOpen(false);
+    setActiveSessionId(null);
+    setBrowserSelected(true);
+    isHomeCamera.current = false;
+    setCamera(focusCamera(browserCanvas.position, browserCanvas.size));
+  }, [persistSettings, sessions.length, settings.homeGridSize, settings.locale, settings.pluginCanvas.length]);
+
+  useEffect(() => {
+    return window.canvasTTY.plugins.onBrowserOpenRequested((request) => {
+      void pluginBrowserOpenQueueRef.current.enqueue(() => openBrowser(request.url)).then(
+        () => window.canvasTTY.plugins.completeBrowserOpen({ requestId: request.requestId, ok: true }),
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : t(settings.locale, "browserActionFailed");
+          showToast(message);
+          return window.canvasTTY.plugins.completeBrowserOpen({ requestId: request.requestId, ok: false, error: message });
+        }
+      ).catch(() => undefined);
+    });
+  }, [openBrowser, settings.locale, showToast]);
+
+  const openBrowserFromUi = useCallback((): void => {
+    void openBrowser().catch((error: unknown) => {
+      showToast(error instanceof Error ? error.message : t(settings.locale, "browserActionFailed"));
+    });
+  }, [openBrowser, settings.locale, showToast]);
 
   const closeBrowser = useCallback(async (): Promise<void> => {
     try {
       const browserApi = window.canvasTTY.browser;
       if (!browserApi) return;
       await browserApi.close();
+      browserCanvasRef.current = null;
       await saveSettings({ browserCanvas: null });
       setBrowserSelected(false);
     } catch (error) {
@@ -657,7 +698,7 @@ export function App(): React.JSX.Element {
           onOpenSettings={() => setSettingsOpen(true)}
           onOpenAgent={setLaunchProvider}
           onOpenTerminal={() => void openTerminal()}
-          onOpenBrowser={() => void openBrowser()}
+          onOpenBrowser={openBrowserFromUi}
           onRequestMedia={requestMedia}
           onRemoveMedia={removeMedia}
           onHomeLayoutChange={changeHomeLayout}
@@ -684,8 +725,6 @@ export function App(): React.JSX.Element {
             setActiveSessionId(null);
             setBrowserSelected(false);
           }}
-          onDeselectSession={(id) => setActiveSessionId((current) => current === id ? null : current)}
-          onDeselectBrowser={() => setBrowserSelected(false)}
           onRenameSession={renameSession}
           onRenameEnd={() => setRenamingSessionId(null)}
           onSessionBoundsChange={changeSessionBounds}

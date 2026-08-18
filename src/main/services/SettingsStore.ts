@@ -5,6 +5,7 @@ import type {
   AgentProviderId,
   AppSettings,
   BrowserCanvasState,
+  CanvasWheelCaptureMode,
   CanvasPatternId,
   EdgePanSpeed,
   FocusActivation,
@@ -25,6 +26,12 @@ import {
   HOME_GRID_MIN_COLUMNS,
   HOME_GRID_MIN_ROWS
 } from "../../shared/contracts.ts";
+import {
+  canvasNavigationPlatform,
+  defaultCanvasWheelBinding,
+  normalizeCanvasOverrideBinding,
+  type CanvasNavigationPlatform
+} from "../../shared/canvasNavigation.ts";
 
 const LOCALES = new Set<LocaleId>(["ru", "en"]);
 const PALETTES = new Set<PaletteId>(["sage", "lilac", "night"]);
@@ -34,23 +41,38 @@ const AGENT_PROVIDERS = new Set<AgentProviderId>(["codex", "claude", "kimi"]);
 const EDGE_PAN_SPEEDS = new Set<EdgePanSpeed>(["slow", "normal", "fast"]);
 const ZOOM_SENSITIVITIES = new Set<ZoomSensitivity>(["slow", "normal", "fast"]);
 const FOCUS_ACTIVATIONS = new Set<FocusActivation>(["off", "single", "double"]);
+const CANVAS_WHEEL_CAPTURE_MODES = new Set<CanvasWheelCaptureMode>(["off", "always", "key"]);
 const SHORTCUT_MODIFIERS = new Set(["Ctrl", "Alt", "Shift", "Meta"]);
 const DEFAULT_SHORTCUTS: ShortcutBindings = { home: "Home", renameWindow: "F2" };
 
 export class SettingsStore {
   private readonly filePath: string;
+  private readonly platform: CanvasNavigationPlatform;
   private value: AppSettings;
+  private hasPersistedLegacyWheelCapture = false;
   private writeQueue = Promise.resolve();
 
-  constructor(userDataPath: string, systemLocale: string) {
+  constructor(userDataPath: string, systemLocale: string, platform: string = process.platform) {
     this.filePath = join(userDataPath, "settings.json");
-    this.value = createDefaults(systemLocale);
+    this.platform = canvasNavigationPlatform(platform);
+    this.value = createDefaults(systemLocale, this.platform);
   }
 
   async load(): Promise<AppSettings> {
     try {
       const raw = await readFile(this.filePath, "utf8");
-      this.value = normalizeSettings(JSON.parse(raw), this.value);
+      const candidate: unknown = JSON.parse(raw);
+      const source = candidate && typeof candidate === "object" ? candidate as Record<string, unknown> : {};
+      this.hasPersistedLegacyWheelCapture = Object.hasOwn(source, "zoomOverApplications");
+      const needsMigration = !("useScrollWheelToZoom" in source)
+        || !("canvasNavigationOverride" in source)
+        || !("canvasWheelOverride" in source)
+        || !("canvasWheelCaptureMode" in source);
+      this.value = normalizeSettings(candidate, {
+        ...this.value,
+        useScrollWheelToZoom: true
+      }, this.platform);
+      if (needsMigration) await this.persist();
     } catch (error) {
       if (isMissingFile(error)) {
         await this.persist();
@@ -67,13 +89,23 @@ export class SettingsStore {
   }
 
   async update(patch: Partial<AppSettings>): Promise<AppSettings> {
-    this.value = normalizeSettings({ ...this.value, ...patch }, this.value);
+    if (patch.canvasWheelCaptureMode !== undefined) this.hasPersistedLegacyWheelCapture = true;
+    const nextPatch = patch.canvasWheelCaptureMode === "key"
+      && patch.canvasWheelOverride === undefined
+      && this.value.canvasWheelOverride === null
+      ? { ...patch, canvasWheelOverride: defaultCanvasWheelBinding(this.platform) }
+      : patch;
+    this.value = normalizeSettings({ ...this.value, ...nextPatch }, this.value, this.platform);
     await this.persist();
     return this.get();
   }
 
   private persist(): Promise<void> {
-    const snapshot = JSON.stringify(this.value, null, 2);
+    const persistedValue: Partial<AppSettings> & { zoomOverApplications?: boolean } = { ...this.value };
+    if (this.hasPersistedLegacyWheelCapture) {
+      persistedValue.zoomOverApplications = this.value.canvasWheelCaptureMode === "always";
+    }
+    const snapshot = JSON.stringify(persistedValue, null, 2);
     const temporaryPath = `${this.filePath}.tmp`;
 
     const write = this.writeQueue.catch(() => undefined).then(async () => {
@@ -87,7 +119,7 @@ export class SettingsStore {
   }
 }
 
-function createDefaults(systemLocale: string): AppSettings {
+function createDefaults(systemLocale: string, platform: CanvasNavigationPlatform): AppSettings {
   return {
     locale: systemLocale.toLowerCase().startsWith("ru") ? "ru" : "en",
     palette: "sage",
@@ -98,7 +130,10 @@ function createDefaults(systemLocale: string): AppSettings {
     edgePan: false,
     edgePanSpeed: "normal",
     zoomSensitivity: "normal",
-    zoomOverApplications: true,
+    useScrollWheelToZoom: false,
+    canvasWheelCaptureMode: "key",
+    canvasWheelOverride: defaultCanvasWheelBinding(platform),
+    canvasNavigationOverride: "Alt",
     focusActivation: "off",
     hoverFocus: false,
     hoverFocusSpeed: "normal",
@@ -118,12 +153,16 @@ function createDefaults(systemLocale: string): AppSettings {
   };
 }
 
-export function normalizeSettings(candidate: unknown, fallback: AppSettings): AppSettings {
+export function normalizeSettings(
+  candidate: unknown,
+  fallback: AppSettings,
+  platform: CanvasNavigationPlatform = canvasNavigationPlatform(process.platform)
+): AppSettings {
   if (!candidate || typeof candidate !== "object") {
     return fallback;
   }
 
-  const source = candidate as Partial<AppSettings>;
+  const source = candidate as Partial<AppSettings> & { zoomOverApplications?: unknown };
   const mediaPath = source.mediaPath === null || typeof source.mediaPath === "string"
     ? source.mediaPath
     : fallback.mediaPath;
@@ -133,6 +172,16 @@ export function normalizeSettings(candidate: unknown, fallback: AppSettings): Ap
     )
     : fallback.acknowledgedDangerousProfiles;
   const shortcuts = normalizeShortcuts(source.shortcuts, fallback.shortcuts);
+  const navigationOverrideCandidate = source.canvasNavigationOverride === undefined
+    ? fallback.canvasNavigationOverride
+    : source.canvasNavigationOverride;
+  const canvasNavigationOverride = navigationOverrideCandidate === null
+    ? null
+    : normalizeCanvasOverrideBinding(
+      navigationOverrideCandidate,
+      Object.values(shortcuts)
+    );
+  const wheelCapture = normalizeCanvasWheelCapture(source, fallback, platform, Object.values(shortcuts));
   const homeGridSize = normalizeHomeGridSize(
     source.homeGridSize,
     fallback.homeGridSize ?? DEFAULT_HOME_GRID_SIZE
@@ -165,9 +214,12 @@ export function normalizeSettings(candidate: unknown, fallback: AppSettings): Ap
     zoomSensitivity: ZOOM_SENSITIVITIES.has(source.zoomSensitivity as ZoomSensitivity)
       ? source.zoomSensitivity as ZoomSensitivity
       : fallback.zoomSensitivity,
-    zoomOverApplications: typeof source.zoomOverApplications === "boolean"
-      ? source.zoomOverApplications
-      : fallback.zoomOverApplications,
+    useScrollWheelToZoom: typeof source.useScrollWheelToZoom === "boolean"
+      ? source.useScrollWheelToZoom
+      : fallback.useScrollWheelToZoom,
+    canvasWheelCaptureMode: wheelCapture.mode,
+    canvasWheelOverride: wheelCapture.binding,
+    canvasNavigationOverride,
     focusActivation: FOCUS_ACTIVATIONS.has(source.focusActivation as FocusActivation)
       ? source.focusActivation as FocusActivation
       : fallback.focusActivation,
@@ -199,6 +251,50 @@ export function normalizeSettings(candidate: unknown, fallback: AppSettings): Ap
       ? source.browserRestoreTabs
       : fallback.browserRestoreTabs
   };
+}
+
+function normalizeCanvasWheelCapture(
+  source: Partial<AppSettings> & { zoomOverApplications?: unknown },
+  fallback: AppSettings,
+  platform: CanvasNavigationPlatform,
+  actionShortcuts: readonly string[]
+): { mode: CanvasWheelCaptureMode; binding: string | null } {
+  const hasMode = Object.hasOwn(source, "canvasWheelCaptureMode");
+  const requestedMode = CANVAS_WHEEL_CAPTURE_MODES.has(source.canvasWheelCaptureMode as CanvasWheelCaptureMode)
+    ? source.canvasWheelCaptureMode as CanvasWheelCaptureMode
+    : null;
+  const hasBinding = Object.hasOwn(source, "canvasWheelOverride");
+  const rawBinding = source.canvasWheelOverride;
+  const normalizedSourceBinding = rawBinding === null || rawBinding === undefined
+    ? null
+    : normalizeCanvasOverrideBinding(rawBinding, actionShortcuts);
+  const invalidSourceBinding = hasBinding && rawBinding !== null && rawBinding !== undefined
+    && normalizedSourceBinding === null;
+
+  if (hasMode && requestedMode !== null) {
+    const binding = hasBinding ? normalizedSourceBinding : fallback.canvasWheelOverride;
+    if (requestedMode === "key" && binding === null) return { mode: "off", binding: null };
+    return { mode: requestedMode, binding };
+  }
+
+  if (typeof source.zoomOverApplications === "boolean") {
+    if (source.zoomOverApplications) {
+      return {
+        mode: "always",
+        binding: normalizedSourceBinding ?? defaultCanvasWheelBinding(platform)
+      };
+    }
+    return normalizedSourceBinding === null
+      ? { mode: "off", binding: null }
+      : { mode: "key", binding: normalizedSourceBinding };
+  }
+
+  if (invalidSourceBinding) return { mode: "off", binding: null };
+  const binding = normalizedSourceBinding ?? fallback.canvasWheelOverride ?? defaultCanvasWheelBinding(platform);
+  const mode = requestedMode ?? fallback.canvasWheelCaptureMode;
+  return mode === "key" && binding === null
+    ? { mode: "off", binding: null }
+    : { mode, binding };
 }
 
 export function normalizeHomeLayout(

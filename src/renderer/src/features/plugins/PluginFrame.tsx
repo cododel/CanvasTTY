@@ -9,6 +9,11 @@ import type {
   ProviderId,
   SessionSnapshot
 } from "../../../../shared/contracts";
+import {
+  pluginCanvasFocusInput,
+  pluginCanvasWheelInput,
+  type PluginCanvasWheelInput
+} from "./pluginInputBridge";
 
 const storageListeners = new Map<string, Set<(key: string, value: unknown) => void>>();
 
@@ -21,6 +26,10 @@ interface PluginFrameProps {
   limits: LimitsSnapshot | null;
   canvasInstanceId?: string;
   className?: string;
+  captureCanvasWheelOverWidgets: boolean;
+  onCanvasWheel(event: PluginCanvasWheelInput): void;
+  onFocus(): void;
+  onHoverChange(active: boolean): void;
   onOpenLauncher(provider: ProviderId): void;
   onError(message: string): void;
 }
@@ -42,6 +51,10 @@ export function PluginFrame({
   limits,
   canvasInstanceId,
   className,
+  captureCanvasWheelOverWidgets,
+  onCanvasWheel,
+  onFocus,
+  onHoverChange,
   onOpenLauncher,
   onError
 }: PluginFrameProps): React.JSX.Element {
@@ -73,6 +86,38 @@ export function PluginFrame({
       if (event.source !== frame.current?.contentWindow || !isRecord(event.data)) return;
       const message = event.data as PluginMessage;
       if (message.source !== "canvastty-plugin") return;
+      const input = pluginCanvasFocusInput(event.data);
+      if (input?.type === "focus") {
+        onFocus();
+        return;
+      }
+      if (input?.type === "hover") {
+        if (input.active) {
+          onHoverChange(true);
+        } else {
+          const pluginFrame = frame.current;
+          requestAnimationFrame(() => {
+            const widget = pluginFrame?.closest<HTMLElement>("[data-canvas-widget-id]");
+            if (!widget?.matches(":hover")) onHoverChange(false);
+          });
+        }
+        return;
+      }
+      if (message.type === "canvas-wheel") {
+        if (!captureCanvasWheelOverWidgets) return;
+        const pluginFrame = frame.current;
+        const bounds = pluginFrame?.getBoundingClientRect();
+        const wheel = bounds && pluginFrame ? pluginCanvasWheelInput(event.data, {
+          left: bounds.left,
+          top: bounds.top,
+          width: bounds.width,
+          height: bounds.height,
+          layoutWidth: pluginFrame.clientWidth,
+          layoutHeight: pluginFrame.clientHeight
+        }) : null;
+        if (wheel) onCanvasWheel(wheel);
+        return;
+      }
       if (message.type === "ready") {
         postToFrame(frame.current, { source: "canvastty-host", type: "context", value: context });
         return;
@@ -111,11 +156,15 @@ export function PluginFrame({
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
-  }, [canvasInstanceId, context, limits, onError, onOpenLauncher, plugin, sessions]);
+  }, [canvasInstanceId, captureCanvasWheelOverWidgets, context, limits, onCanvasWheel, onError, onFocus, onHoverChange, onOpenLauncher, plugin, sessions]);
 
   useEffect(() => {
     postToFrame(frame.current, { source: "canvastty-host", type: "context", value: context });
   }, [context]);
+
+  useEffect(() => {
+    postCanvasInputPolicy(frame.current, captureCanvasWheelOverWidgets);
+  }, [captureCanvasWheelOverWidgets]);
 
   useEffect(() => subscribeStorage(plugin.manifest.id, (key, value) => {
     postToFrame(frame.current, { source: "canvastty-host", type: "storage-change", key, value });
@@ -129,7 +178,10 @@ export function PluginFrame({
       title={`${plugin.manifest.name}: ${contribution.title}`}
       sandbox="allow-scripts"
       referrerPolicy="no-referrer"
-      onLoad={() => postToFrame(frame.current, { source: "canvastty-host", type: "context", value: context })}
+      onLoad={() => {
+        postToFrame(frame.current, { source: "canvastty-host", type: "context", value: context });
+        postCanvasInputPolicy(frame.current, captureCanvasWheelOverWidgets);
+      }}
     />
   );
 }
@@ -210,6 +262,11 @@ async function handleRequest({
     await window.canvasTTY.plugins.openExternal(pluginId, stringParam(params.url, "url"));
     return null;
   }
+  if (method === "browser.open") {
+    requirePermission(plugin, "browser:open");
+    await window.canvasTTY.plugins.openBrowser(pluginId, stringParam(params.url, "url"));
+    return null;
+  }
   if (method === "media.pickLibrary") {
     requirePermission(plugin, "media:library");
     return window.canvasTTY.plugins.mediaPickLibrary(pluginId);
@@ -277,6 +334,10 @@ function requirePermission(plugin: InstalledPlugin, permission: PluginPermission
 
 function postToFrame(frame: HTMLIFrameElement | null, message: object): void {
   frame?.contentWindow?.postMessage(message, "*");
+}
+
+function postCanvasInputPolicy(frame: HTMLIFrameElement | null, captureWheel: boolean): void {
+  postToFrame(frame, { source: "canvastty-host", type: "canvas-input-policy", captureWheel });
 }
 
 function subscribeStorage(pluginId: string, listener: (key: string, value: unknown) => void): () => void {

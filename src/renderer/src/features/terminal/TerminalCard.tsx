@@ -5,7 +5,6 @@ import type {
   LocaleId,
   PaletteId,
   Point,
-  EdgePanSpeed,
   FocusActivation,
   SessionBounds,
   SessionSnapshot
@@ -28,8 +27,9 @@ import {
   snapMove,
   snapResize
 } from "../workspace/snap";
-import { HOVER_FOCUS_DELAYS, shouldActivateCanvasFromClick } from "../workspace/focus";
+import { shouldActivateCanvasFromClick } from "../workspace/focus";
 import type { ResizeDirection } from "../workspace/snap";
+import { terminalCanvasWidgetId } from "../workspace/canvasWidgetFocus";
 
 interface TerminalCardProps {
   session: SessionSnapshot;
@@ -38,16 +38,15 @@ interface TerminalCardProps {
   zoom: number;
   snapEnabled: boolean;
   focusActivation: FocusActivation;
-  hoverFocus: boolean;
-  hoverFocusSpeed: EdgePanSpeed;
   invertTerminalWheel: boolean;
-  zoomOverApplications: boolean;
+  captureCanvasWheelOverWidgets: boolean;
+  focused: boolean;
+  focusChangeSource: "explicit" | "hover";
   selected: boolean;
   renaming: boolean;
   snapTargets: readonly SessionBounds[];
   onActivate(session: SessionSnapshot): void;
   onSelect(id: string): void;
-  onDeselect(id: string): void;
   onRename(id: string, title: string): Promise<void>;
   onRenameEnd(): void;
   onBoundsChange(id: string, bounds: SessionBounds): void;
@@ -76,16 +75,15 @@ export function TerminalCard({
   zoom,
   snapEnabled,
   focusActivation,
-  hoverFocus,
-  hoverFocusSpeed,
   invertTerminalWheel,
-  zoomOverApplications,
+  captureCanvasWheelOverWidgets,
+  focused,
+  focusChangeSource,
   selected,
   renaming,
   snapTargets,
   onActivate,
   onSelect,
-  onDeselect,
   onRename,
   onRenameEnd,
   onBoundsChange,
@@ -96,17 +94,14 @@ export function TerminalCard({
   const terminalRef = useRef<Terminal | null>(null);
   const renameInput = useRef<HTMLInputElement>(null);
   const renameInFlight = useRef(false);
-  const hoverFocusTimer = useRef<number | null>(null);
-  const hoverFocusTransition = useRef<"focus" | "blur" | null>(null);
-  const hoverSelected = useRef(false);
   const suppressFocusReport = useRef(false);
   const sessionExited = useRef(session.exitCode !== null);
   sessionExited.current = session.exitCode !== null;
   const restartAction = useRef<() => Promise<void>>(async () => undefined);
   const invertTerminalWheelRef = useRef(invertTerminalWheel);
   invertTerminalWheelRef.current = invertTerminalWheel;
-  const zoomOverApplicationsRef = useRef(zoomOverApplications);
-  zoomOverApplicationsRef.current = zoomOverApplications;
+  const captureCanvasWheelRef = useRef(captureCanvasWheelOverWidgets);
+  captureCanvasWheelRef.current = captureCanvasWheelOverWidgets;
   const dragState = useRef<DragState | null>(null);
   const resizeState = useRef<ResizeState | null>(null);
   const [position, setPosition] = useState(session.position);
@@ -197,7 +192,7 @@ export function TerminalCard({
       ? attachTerminalMouseCoordinateAdapter(
         screen,
         () => invertTerminalWheelRef.current ? -1 : 1,
-        () => zoomOverApplicationsRef.current
+        () => captureCanvasWheelRef.current
       )
       : () => undefined;
     terminalRef.current = terminal;
@@ -215,7 +210,7 @@ export function TerminalCard({
     resizeObserver.observe(host);
 
     const input = terminal.onData((data) => {
-      // Hover focus routes keyboard input locally; it is not an OS focus change for the agent TUI.
+      // Hover focus routes keyboard input locally without reporting a synthetic focus transition to the TUI.
       if (suppressFocusReport.current && (data === TERMINAL_FOCUS_IN || data === TERMINAL_FOCUS_OUT)) return;
       window.canvasTTY.terminal.input(session.id, data);
     });
@@ -244,27 +239,14 @@ export function TerminalCard({
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
-    const transition = hoverFocusTransition.current;
-    suppressFocusReport.current = transition !== null || (!selected && hoverSelected.current);
-    if (selected && !renaming && !summaryMode) terminal.focus();
-    else if (!selected) {
+    suppressFocusReport.current = focusChangeSource === "hover";
+    if (focused && !renaming && !summaryMode) terminal.focus();
+    else if (!focused) {
       terminal.blur();
       renameInput.current?.blur();
-      hoverSelected.current = false;
     }
     suppressFocusReport.current = false;
-    hoverFocusTransition.current = null;
-  }, [renaming, selected, summaryMode]);
-
-  useEffect(() => () => {
-    if (hoverFocusTimer.current !== null) window.clearTimeout(hoverFocusTimer.current);
-  }, []);
-
-  useEffect(() => {
-    if (hoverFocus || hoverFocusTimer.current === null) return;
-    window.clearTimeout(hoverFocusTimer.current);
-    hoverFocusTimer.current = null;
-  }, [hoverFocus]);
+  }, [focusChangeSource, focused, renaming, summaryMode]);
 
   const bindRenameInput = useCallback((input: HTMLInputElement | null): void => {
     renameInput.current = input;
@@ -375,30 +357,6 @@ export function TerminalCard({
     onActivate(session);
   };
 
-  const scheduleHoverFocus = (): void => {
-    if (hoverFocusTimer.current !== null) window.clearTimeout(hoverFocusTimer.current);
-    hoverFocusTimer.current = null;
-    if (!hoverFocus || selected) return;
-    hoverFocusTimer.current = window.setTimeout(() => {
-      hoverFocusTimer.current = null;
-      hoverSelected.current = true;
-      hoverFocusTransition.current = "focus";
-      onSelect(session.id);
-    }, HOVER_FOCUS_DELAYS[hoverFocusSpeed]);
-  };
-
-  const scheduleHoverBlur = (): void => {
-    if (hoverFocusTimer.current !== null) window.clearTimeout(hoverFocusTimer.current);
-    hoverFocusTimer.current = null;
-    if (!hoverFocus || !selected) return;
-    hoverFocusTimer.current = window.setTimeout(() => {
-      hoverFocusTimer.current = null;
-      hoverFocusTransition.current = "blur";
-      hoverSelected.current = false;
-      onDeselect(session.id);
-    }, HOVER_FOCUS_DELAYS[hoverFocusSpeed]);
-  };
-
   const commitRename = async (): Promise<void> => {
     if (renameInFlight.current) return;
     const title = renameInput.current?.value.trim() ?? "";
@@ -419,21 +377,17 @@ export function TerminalCard({
     <article
       className={`terminal-card ${summaryMode ? "terminal-card--summary" : ""} ${selected ? "terminal-card--selected" : ""}`}
       data-interactive="true"
+      data-canvas-widget-id={terminalCanvasWidgetId(session.id)}
+      data-canvas-widget-focusable="true"
       data-canvas-zoom-surface="application"
       data-wheel-owner={summaryMode ? undefined : "local"}
       tabIndex={-1}
       onPointerDownCapture={(event) => {
-        if (hoverFocusTimer.current !== null) window.clearTimeout(hoverFocusTimer.current);
-        hoverFocusTimer.current = null;
-        if (hoverFocusTransition.current === "focus") hoverSelected.current = false;
-        hoverFocusTransition.current = null;
         onSelect(session.id);
         if (!renaming && !summaryMode && !(event.target as HTMLElement).closest("button, input")) {
           terminalRef.current?.focus();
         }
       }}
-      onPointerEnter={scheduleHoverFocus}
-      onPointerLeave={scheduleHoverBlur}
       onClick={activateCard}
       onDoubleClick={activateCardDouble}
       style={{

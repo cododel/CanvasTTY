@@ -16,6 +16,8 @@ import { t } from "../../lib/i18n";
 import { snapMove, snapResize, type ResizeDirection } from "../workspace/snap";
 import { constrainPluginResize } from "./pluginBounds";
 import { PluginFrame } from "./PluginFrame";
+import type { PluginCanvasWheelInput } from "./pluginInputBridge";
+import { pluginCanvasWidgetId } from "../workspace/canvasWidgetFocus";
 
 interface PluginCanvasCardProps {
   instance: PluginCanvasInstance;
@@ -33,6 +35,10 @@ interface PluginCanvasCardProps {
   onDispose(id: string): void;
   onOpenLauncher(provider: ProviderId): void;
   onError(message: string): void;
+  captureCanvasWheelOverWidgets: boolean;
+  onWidgetFocus(): void;
+  onWidgetHoverChange(active: boolean): void;
+  onCanvasWheel(event: PluginCanvasWheelInput): void;
 }
 
 interface DragState {
@@ -62,7 +68,11 @@ export function PluginCanvasCard({
   onBoundsChange,
   onDispose,
   onOpenLauncher,
-  onError
+  onError,
+  captureCanvasWheelOverWidgets,
+  onWidgetFocus,
+  onWidgetHoverChange,
+  onCanvasWheel
 }: PluginCanvasCardProps): React.JSX.Element {
   const dragState = useRef<DragState | null>(null);
   const resizeState = useRef<ResizeState | null>(null);
@@ -175,6 +185,8 @@ export function PluginCanvasCard({
     <article
       className={`plugin-canvas-card ${summaryMode ? "plugin-canvas-card--summary" : ""}`}
       data-interactive="true"
+      data-canvas-widget-id={pluginCanvasWidgetId(instance.id)}
+      data-canvas-widget-focusable="true"
       data-wheel-owner={summaryMode ? undefined : "local"}
       style={{
         width: size.width,
@@ -204,6 +216,10 @@ export function PluginCanvasCard({
         palette={palette}
         sessions={sessions}
         limits={limits}
+        captureCanvasWheelOverWidgets={captureCanvasWheelOverWidgets}
+        onCanvasWheel={onCanvasWheel}
+        onFocus={onWidgetFocus}
+        onHoverChange={onWidgetHoverChange}
         canvasInstanceId={instance.id}
         onOpenLauncher={onOpenLauncher}
         onError={onError}

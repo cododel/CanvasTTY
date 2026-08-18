@@ -8,6 +8,8 @@ export type LocaleId = "ru" | "en";
 export type MediaFit = "cover" | "contain";
 export type EdgePanSpeed = "slow" | "normal" | "fast";
 export type ZoomSensitivity = "slow" | "normal" | "fast";
+export type CanvasWheelCaptureMode = "off" | "always" | "key";
+export type BrowserViewportSurface = "native" | "placeholder" | "hidden";
 export type FocusActivation = "off" | "single" | "double";
 export type ShortcutAction = "home" | "renameWindow";
 
@@ -93,7 +95,10 @@ export interface AppSettings {
   edgePan: boolean;
   edgePanSpeed: EdgePanSpeed;
   zoomSensitivity: ZoomSensitivity;
-  zoomOverApplications: boolean;
+  useScrollWheelToZoom: boolean;
+  canvasWheelCaptureMode: CanvasWheelCaptureMode;
+  canvasWheelOverride: string | null;
+  canvasNavigationOverride: string | null;
   focusActivation: FocusActivation;
   hoverFocus: boolean;
   hoverFocusSpeed: EdgePanSpeed;
@@ -171,6 +176,7 @@ export type PluginPermission =
   | "limits:read"
   | "launcher:open"
   | "external:open"
+  | "browser:open"
   | "media:library"
   | "playlists:read"
   | "playlists:write"
@@ -282,6 +288,18 @@ export interface PluginCanvasRequest {
   sourceCanvasInstanceId?: string;
 }
 
+export interface PluginBrowserOpenRequest {
+  requestId: string;
+  pluginId: string;
+  url: string;
+}
+
+export interface PluginBrowserOpenResponse {
+  requestId: string;
+  ok: boolean;
+  error?: string;
+}
+
 export interface PluginStorageChangeEvent {
   pluginId: string;
   key: string;
@@ -314,9 +332,8 @@ export interface BrowserCanvasState extends SessionBounds {}
 export interface BrowserViewportBounds extends Size {
   x: number;
   y: number;
-  visible: boolean;
+  surface: BrowserViewportSurface;
   canvasScale?: number;
-  captureCanvasWheel?: boolean;
   showAgentPresence?: boolean;
 }
 
@@ -404,7 +421,29 @@ export interface BrowserCanvasWheelEvent {
   tabId: string;
   clientX: number;
   clientY: number;
+  deltaX: number;
   deltaY: number;
+  ctrlKey: boolean;
+  metaKey: boolean;
+}
+
+export interface BrowserCanvasFreezeFrameEvent {
+  tabId: string;
+  generation: number;
+  active: boolean;
+  dataUrl: string | null;
+}
+
+export interface BrowserCanvasNavigationPointerEvent {
+  tabId: string;
+  type: "down" | "move" | "up" | "cancel";
+  clientX: number;
+  clientY: number;
+}
+
+export interface CanvasNavigationOverrideStateEvent {
+  wheelActive: boolean;
+  navigationActive: boolean;
 }
 
 export interface BrowserCanvasPointerEvent {
@@ -655,6 +694,7 @@ export interface CanvasTTYApi {
     openCanvas(pluginId: string, contributionId: string, sourceCanvasInstanceId?: string): Promise<void>;
     openWindow(pluginId: string, contributionId: string): Promise<void>;
     openExternal(pluginId: string, url: string): Promise<void>;
+    openBrowser(pluginId: string, url: string): Promise<void>;
     storageGet(pluginId: string, key: string): Promise<unknown>;
     storageSet(pluginId: string, key: string, value: unknown): Promise<void>;
     secretsGet(pluginId: string, key: string): Promise<string | null>;
@@ -669,6 +709,8 @@ export interface CanvasTTYApi {
     playlistsWrite(pluginId: string, libraryId: string, name: string, content: string): Promise<PluginPlaylistFile>;
     onOpenLauncher(listener: (event: PluginLauncherRequest) => void): () => void;
     onOpenCanvas(listener: (event: PluginCanvasRequest) => void): () => void;
+    onBrowserOpenRequested(listener: (event: PluginBrowserOpenRequest) => void): () => void;
+    completeBrowserOpen(response: PluginBrowserOpenResponse): Promise<boolean>;
     onStorageChanged(listener: (event: PluginStorageChangeEvent) => void): () => void;
   };
   browser: {
@@ -687,11 +729,20 @@ export interface CanvasTTYApi {
     getActivity(sinceSequence?: number): Promise<BrowserActivityEvent[]>;
     clearData(): Promise<BrowserSnapshot>;
     focus(): void;
+    setInputFocused(focused: boolean): void;
     setViewport(bounds: BrowserViewportBounds): void;
     onState(listener: (event: BrowserStateEvent) => void): () => void;
     onActivity(listener: (event: BrowserActivityStateEvent) => void): () => void;
     onCanvasWheel(listener: (event: BrowserCanvasWheelEvent) => void): () => void;
+    onCanvasFreezeFrame(listener: (event: BrowserCanvasFreezeFrameEvent) => void): () => void;
     onCanvasPointer(listener: (event: BrowserCanvasPointerEvent) => void): () => void;
+    onCanvasNavigationPointer(listener: (event: BrowserCanvasNavigationPointerEvent) => void): () => void;
+  };
+  canvasNavigation: {
+    armOwnerWheelSequence(clientX: number, clientY: number): void;
+    setShortcutCaptureActive(active: boolean): void;
+    setPointerGestureActive(active: boolean): void;
+    onOverrideState(listener: (event: CanvasNavigationOverrideStateEvent) => void): () => void;
   };
   terminal: {
     list(): Promise<SessionSnapshot[]>;
@@ -734,6 +785,7 @@ export const IPC = {
   pluginsOpenCanvas: "plugins:open-canvas",
   pluginsOpenWindow: "plugins:open-window",
   pluginsOpenExternal: "plugins:open-external",
+  pluginsOpenBrowser: "plugins:open-browser",
   pluginsStorageGet: "plugins:storage-get",
   pluginsStorageSet: "plugins:storage-set",
   pluginsSecretsGet: "plugins:secrets-get",
@@ -749,6 +801,8 @@ export const IPC = {
   pluginsHostInvoke: "plugins:host-invoke",
   pluginsLauncherRequested: "plugins:launcher-requested",
   pluginsCanvasRequested: "plugins:canvas-requested",
+  pluginsBrowserOpenRequested: "plugins:browser-open-requested",
+  pluginsBrowserOpenResponded: "plugins:browser-open-responded",
   pluginsStorageChanged: "plugins:storage-changed",
   browserGetState: "browser:get-state",
   browserOpen: "browser:open",
@@ -765,11 +819,20 @@ export const IPC = {
   browserGetActivity: "browser:get-activity",
   browserClearData: "browser:clear-data",
   browserFocus: "browser:focus",
+  browserSetInputFocused: "browser:set-input-focused",
   browserSetViewport: "browser:set-viewport",
   browserState: "browser:state",
   browserActivity: "browser:activity",
+  browserPageWheelDecision: "browser:page-wheel-decision",
+  browserPageWheel: "browser:page-wheel",
   browserCanvasWheel: "browser:canvas-wheel",
+  browserCanvasFreezeFrame: "browser:canvas-freeze-frame",
   browserCanvasPointer: "browser:canvas-pointer",
+  browserCanvasNavigationPointer: "browser:canvas-navigation-pointer",
+  canvasNavigationShortcutCapture: "canvas-navigation:shortcut-capture",
+  canvasNavigationOwnerWheel: "canvas-navigation:owner-wheel",
+  canvasNavigationPointerGesture: "canvas-navigation:pointer-gesture",
+  canvasNavigationOverrideState: "canvas-navigation:override-state",
   terminalList: "terminal:list",
   terminalCreate: "terminal:create",
   terminalRestart: "terminal:restart",

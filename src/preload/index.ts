@@ -2,13 +2,18 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   AppSettings,
   BrowserActivityStateEvent,
+  BrowserCanvasFreezeFrameEvent,
+  BrowserCanvasNavigationPointerEvent,
   BrowserCanvasPointerEvent,
   BrowserCanvasWheelEvent,
   BrowserCommand,
   BrowserStateEvent,
   BrowserViewportBounds,
+  CanvasNavigationOverrideStateEvent,
   CanvasTTYApi,
   CreateSessionRequest,
+  PluginBrowserOpenRequest,
+  PluginBrowserOpenResponse,
   PluginCanvasRequest,
   PluginLauncherRequest,
   PluginStorageChangeEvent,
@@ -58,6 +63,7 @@ const api: CanvasTTYApi = {
     ),
     openWindow: (pluginId: string, contributionId: string) => ipcRenderer.invoke(IPC.pluginsOpenWindow, pluginId, contributionId),
     openExternal: (pluginId: string, url: string) => ipcRenderer.invoke(IPC.pluginsOpenExternal, pluginId, url),
+    openBrowser: (pluginId: string, url: string) => ipcRenderer.invoke(IPC.pluginsOpenBrowser, pluginId, url),
     storageGet: (pluginId: string, key: string) => ipcRenderer.invoke(IPC.pluginsStorageGet, pluginId, key),
     storageSet: (pluginId: string, key: string, value: unknown) => ipcRenderer.invoke(IPC.pluginsStorageSet, pluginId, key, value),
     secretsGet: (pluginId: string, key: string) => ipcRenderer.invoke(IPC.pluginsSecretsGet, pluginId, key),
@@ -72,6 +78,12 @@ const api: CanvasTTYApi = {
     playlistsWrite: (pluginId: string, libraryId: string, name: string, content: string) => ipcRenderer.invoke(IPC.pluginsPlaylistsWrite, pluginId, libraryId, name, content),
     onOpenLauncher: (listener: (event: PluginLauncherRequest) => void) => subscribe(IPC.pluginsLauncherRequested, listener),
     onOpenCanvas: (listener: (event: PluginCanvasRequest) => void) => subscribe(IPC.pluginsCanvasRequested, listener),
+    onBrowserOpenRequested: (listener: (event: PluginBrowserOpenRequest) => void) => (
+      subscribe(IPC.pluginsBrowserOpenRequested, listener)
+    ),
+    completeBrowserOpen: (response: PluginBrowserOpenResponse) => (
+      ipcRenderer.invoke(IPC.pluginsBrowserOpenResponded, response)
+    ),
     onStorageChanged: (listener: (event: PluginStorageChangeEvent) => void) => subscribe(IPC.pluginsStorageChanged, listener)
   },
   browser: {
@@ -90,11 +102,30 @@ const api: CanvasTTYApi = {
     getActivity: (sinceSequence?: number) => ipcRenderer.invoke(IPC.browserGetActivity, sinceSequence),
     clearData: () => ipcRenderer.invoke(IPC.browserClearData),
     focus: () => ipcRenderer.send(IPC.browserFocus),
+    setInputFocused: (focused: boolean) => {
+      ipcRenderer.sendSync(IPC.browserSetInputFocused, focused);
+    },
     setViewport: (bounds: BrowserViewportBounds) => ipcRenderer.send(IPC.browserSetViewport, bounds),
     onState: (listener: (event: BrowserStateEvent) => void) => subscribe(IPC.browserState, listener),
     onActivity: (listener: (event: BrowserActivityStateEvent) => void) => subscribe(IPC.browserActivity, listener),
     onCanvasWheel: (listener: (event: BrowserCanvasWheelEvent) => void) => subscribe(IPC.browserCanvasWheel, listener),
-    onCanvasPointer: (listener: (event: BrowserCanvasPointerEvent) => void) => subscribe(IPC.browserCanvasPointer, listener)
+    onCanvasFreezeFrame: (listener: (event: BrowserCanvasFreezeFrameEvent) => void) => (
+      subscribe(IPC.browserCanvasFreezeFrame, listener)
+    ),
+    onCanvasPointer: (listener: (event: BrowserCanvasPointerEvent) => void) => subscribe(IPC.browserCanvasPointer, listener),
+    onCanvasNavigationPointer: (listener: (event: BrowserCanvasNavigationPointerEvent) => void) => (
+      subscribe(IPC.browserCanvasNavigationPointer, listener)
+    )
+  },
+  canvasNavigation: {
+    armOwnerWheelSequence: (clientX: number, clientY: number) => {
+      ipcRenderer.sendSync(IPC.canvasNavigationOwnerWheel, { clientX, clientY });
+    },
+    setShortcutCaptureActive: (active: boolean) => ipcRenderer.send(IPC.canvasNavigationShortcutCapture, active),
+    setPointerGestureActive: (active: boolean) => ipcRenderer.send(IPC.canvasNavigationPointerGesture, active),
+    onOverrideState: (listener: (event: CanvasNavigationOverrideStateEvent) => void) => (
+      subscribe(IPC.canvasNavigationOverrideState, listener)
+    )
   },
   terminal: {
     list: () => ipcRenderer.invoke(IPC.terminalList),
