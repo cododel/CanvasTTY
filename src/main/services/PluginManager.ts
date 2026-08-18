@@ -15,6 +15,7 @@ import {
 } from "node:fs/promises";
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import type {
+  GithubPluginSearchResult,
   InstalledPlugin,
   PluginContribution,
   PluginInstallPreview,
@@ -22,6 +23,7 @@ import type {
   PluginModule,
   PluginModuleAsset,
   PluginPermission,
+  PluginUpdateStatus,
   Size
 } from "../../shared/contracts";
 import {
@@ -29,9 +31,30 @@ import {
   HOME_GRID_MAX_ROWS,
   PLUGIN_API_VERSION
 } from "../../shared/contracts.ts";
+import { isValidSemver } from "../../shared/hostVersion.ts";
 
 const MANIFEST_FILE = "canvastty.plugin.json";
+/** Plugins keep their metadata (manifest, icon, etc.) in the metadata/ folder. */
+const METADATA_DIR = "metadata";
+/** Platform name this distribution runs on (the core does not know about it). */
+const PLATFORM_ID = "canvastty";
+/** Manifest candidates: metadata/ first, then the legacy root. */
+const MANIFEST_CANDIDATES = [`${METADATA_DIR}/${MANIFEST_FILE}`, MANIFEST_FILE];
+/** Icon candidates: metadata/ first, then the legacy root. */
+const ICON_CANDIDATES = [
+  `${METADATA_DIR}/icon.png`,
+  `${METADATA_DIR}/icon.svg`,
+  `${METADATA_DIR}/assets/icon.png`,
+  `${METADATA_DIR}/assets/icon.svg`,
+  "icon.png",
+  "icon.svg",
+  "assets/icon.png",
+  "assets/icon.svg"
+];
 const REGISTRY_FILE = "plugins.json";
+const VERSIONS_FILE = "plugin-versions.json";
+const SEARCH_MAX_RESULTS = 10;
+const SEARCH_TIMEOUT_MS = 15_000;
 const PREVIEW_TTL_MS = 10 * 60_000;
 const DOWNLOAD_TIMEOUT_MS = 90_000;
 const DOWNLOAD_ATTEMPTS = 3;
@@ -41,6 +64,7 @@ const MAX_PACKAGE_BYTES = 25 * 1024 * 1024;
 const MAX_ASSET_BYTES = 8 * 1024 * 1024;
 const MAX_STORAGE_BYTES = 64 * 1024;
 const MAX_MANIFEST_BYTES = 128 * 1024;
+const MAX_PLUGIN_ICON_BYTES = 512 * 1024;
 const PLUGIN_INPUT_BRIDGE_URL = "canvastty-plugin://host/input-bridge.js";
 
 export function injectPluginInputBridge(html: string): string {
@@ -73,6 +97,12 @@ interface StoredPluginRecord {
   selectedModules?: string[];
 }
 
+interface StoredVersionRecord {
+  installedVersion: string;
+  latestVersion?: string;
+  checkedAt?: number;
+}
+
 interface PendingInstall {
   directory: string;
   packageRoot: string;
@@ -91,26 +121,48 @@ export class PluginManager {
   private readonly stagingRoot: string;
   private readonly storageRoot: string;
   private readonly registryPath: string;
+  private readonly versionsPath: string;
   private readonly plugins = new Map<string, InstalledPlugin>();
   private readonly pending = new Map<string, PendingInstall>();
   private readonly storageWrites = new Map<string, Promise<void>>();
   private readonly downloadRepository: DownloadRepository;
   private readonly downloadFullRepository: DownloadRepository;
   private readonly downloadModuleFiles: DownloadModuleFiles;
+  private tokenProvider: () => Promise<string | null>;
   private registryWrite = Promise.resolve();
 
   constructor(
     userDataPath: string,
     downloadRepository?: DownloadRepository,
-    downloadModuleFiles: DownloadModuleFiles = downloadGithubModuleFiles
+    downloadModuleFiles: DownloadModuleFiles = downloadGithubModuleFiles,
+    tokenProvider?: () => Promise<string | null>
   ) {
     this.pluginRoot = join(userDataPath, "plugins");
     this.stagingRoot = join(userDataPath, "plugin-staging");
     this.storageRoot = join(userDataPath, "plugin-storage");
     this.registryPath = join(userDataPath, REGISTRY_FILE);
+    this.versionsPath = join(userDataPath, VERSIONS_FILE);
     this.downloadRepository = downloadRepository ?? downloadGithubManifest;
     this.downloadFullRepository = downloadRepository ?? downloadGithubRepository;
     this.downloadModuleFiles = downloadModuleFiles;
+    this.tokenProvider = tokenProvider ?? (async () => null);
+  }
+
+  /** Resolves the GitHub token from env, then the OAuth session (if any). */
+  private async githubToken(): Promise<string | null> {
+    const envToken = process.env.GITHUB_TOKEN ?? process.env.CANVASTTY_GITHUB_TOKEN;
+    if (envToken) return envToken;
+    try {
+      return await this.tokenProvider();
+    } catch {
+      return null;
+    }
+  }
+
+  /** Registers the OAuth-backed token provider used by module-level helpers. */
+  registerTokenProvider(provider: () => Promise<string | null>): void {
+    this.tokenProvider = provider;
+    registerGithubTokenProvider(provider);
   }
 
   async load(): Promise<InstalledPlugin[]> {
@@ -168,6 +220,7 @@ export class PluginManager {
       await this.downloadRepository(canonicalUrl, packageRoot);
       await inspectPackage(packageRoot);
       let manifest = await readManifest(packageRoot);
+      assertPlatformCompatible(manifest);
       if (this.plugins.has(manifest.id)) {
         throw new Error(`Plugin ${manifest.id} is already installed.`);
       }
@@ -310,6 +363,281 @@ export class PluginManager {
     await this.persistRegistry();
     await rm(join(this.pluginRoot, plugin.manifest.id), { recursive: true, force: true });
     await rm(join(this.storageRoot, `${plugin.manifest.id}.json`), { force: true });
+  }
+
+  async searchGithubPlugins(query: string): Promise<GithubPluginSearchResult[]> {
+    const term = query.trim();
+    if (!term) return [];
+    const results = await searchGithubPluginRepositories(term);
+    const mapped = this.excludeInstalled(mapSearchResults(results));
+    return this.filterByPlatform(mapped);
+  }
+
+  async listShowcasePlugins(): Promise<GithubPluginSearchResult[]> {
+    // Test mode: CANVASTTY_SHOWCASE_STUBS=N generates N local stub
+    // entries instead of a real GitHub request (nothing is loaded from GitHub).
+    const stubCount = Number.parseInt(process.env.CANVASTTY_SHOWCASE_STUBS ?? "", 10);
+    if (Number.isFinite(stubCount) && stubCount > 0) {
+      return this.excludeInstalled(makeShowcaseStubs(stubCount));
+    }
+    const results = await listShowcasePluginRepositories();
+    const mapped = this.excludeInstalled(mapSearchResults(results));
+    return this.filterByPlatform(mapped);
+  }
+
+  /**
+   * Drops results whose manifest declares platforms without PLATFORM_ID
+   * (a fork for another platform must not reach the showcase). Legacy plugins
+   * without the platforms field are considered compatible. Also fills in
+   * minHostVersion from the manifest so the UI can flag plugins written for a
+   * newer host version. Uses the previewManifests batch to avoid extra
+   * requests (rate limits preserved).
+   */
+  private async filterByPlatform(results: GithubPluginSearchResult[]): Promise<GithubPluginSearchResult[]> {
+    if (results.length === 0) return results;
+    const manifests = await this.previewManifests(results.map((result) => result.url));
+    const filtered: GithubPluginSearchResult[] = [];
+    for (const result of results) {
+      const manifest = manifests.get(result.url);
+      if (manifest && manifest.platforms && manifest.platforms.length > 0 && !manifest.platforms.includes(PLATFORM_ID)) {
+        continue; // fork for another platform — do not show
+      }
+      filtered.push(manifest?.minHostVersion
+        ? { ...result, minHostVersion: manifest.minHostVersion }
+        : result);
+    }
+    return filtered;
+  }
+
+  /** Drops repositories that are already installed (unless uninstalled later). */
+  private excludeInstalled(results: GithubPluginSearchResult[]): GithubPluginSearchResult[] {
+    if (results.length === 0 || this.plugins.size === 0) return results;
+    const installed = new Set<string>();
+    for (const plugin of this.plugins.values()) {
+      if (!plugin.sourceUrl) continue;
+      const key = repositoryKeyOfUrl(plugin.sourceUrl);
+      if (key) installed.add(key);
+    }
+    if (installed.size === 0) return results;
+    return results.filter((result) => !installed.has(repositoryKeyOfUrl(result.url)));
+  }
+
+  async fetchPluginIcons(sourceUrls: string[]): Promise<Map<string, string | null>> {
+    const unique = [...new Set(sourceUrls)].filter((url) => typeof url === "string" && url.length > 0);
+    const icons = new Map<string, string | null>();
+    if (unique.length === 0) return icons;
+
+    // Candidates in priority order; each batch probes one candidate across all
+    // repositories with a single GraphQL request (metadata only), then fetches
+    // the bytes of present files via raw.githubusercontent (not rate-limited).
+    const candidates = ICON_CANDIDATES;
+    for (const candidate of candidates) {
+      const remaining = unique.filter((url) => !icons.has(url));
+      if (remaining.length === 0) break;
+      const entries: Array<{ key: string; owner: string; repository: string; path: string; maximumBytes: number; asDataUrl: boolean }> = [];
+      for (const url of remaining) {
+        let owner = "";
+        let repository = "";
+        try {
+          const source = new URL(url);
+          const parts = source.pathname.split("/").filter(Boolean);
+          owner = parts[0] ?? "";
+          repository = (parts[1] ?? "").replace(/\.git$/i, "");
+        } catch {
+          continue;
+        }
+        if (!owner || !repository) continue;
+        entries.push({ key: url, owner, repository, path: candidate, maximumBytes: MAX_PLUGIN_ICON_BYTES, asDataUrl: true });
+      }
+      if (entries.length === 0) continue;
+      const results = await githubGraphqlBatch(entries);
+      for (const [key, result] of results) {
+        if (result.ok && result.dataUrl) {
+          icons.set(key, result.dataUrl);
+        }
+      }
+    }
+    for (const url of unique) {
+      if (!icons.has(url)) icons.set(url, null);
+    }
+    return icons;
+  }
+
+  /**
+   * Batch-fetches full manifests (including localized descriptions) for the
+   * given repositories. The UI calls this once when the showcase opens or a
+   * page turns, so expanding a tile afterwards is instant (no network).
+   */
+  async previewManifests(sourceUrls: string[]): Promise<Map<string, PluginManifest>> {
+    const unique = [...new Set(sourceUrls)].filter((url) => typeof url === "string" && url.length > 0);
+    const manifests = new Map<string, PluginManifest>();
+    if (unique.length === 0) return manifests;
+
+    // Metadata-first: metadata/canvastty.plugin.json, then legacy root file.
+    const parsed = new Map<string, { owner: string; repository: string }>();
+    for (const sourceUrl of unique) {
+      try {
+        const source = new URL(sourceUrl);
+        const parts = source.pathname.split("/").filter(Boolean);
+        const owner = parts[0] ?? "";
+        const repository = (parts[1] ?? "").replace(/\.git$/i, "");
+        if (owner && repository) parsed.set(sourceUrl, { owner, repository });
+      } catch {
+        // Unparseable URL — skipped.
+      }
+    }
+    const toEntries = (path: string): Array<{ key: string; owner: string; repository: string; path: string; maximumBytes: number; asDataUrl: boolean }> =>
+      [...parsed.entries()].map(([key, repo]) => ({
+        key, owner: repo.owner, repository: repo.repository, path, maximumBytes: MAX_MANIFEST_BYTES, asDataUrl: false
+      }));
+
+    for (const candidate of MANIFEST_CANDIDATES) {
+      const pending = [...parsed.keys()].filter((key) => !manifests.has(key));
+      if (pending.length === 0) break;
+      const results = await githubGraphqlBatch(toEntries(candidate).filter((entry) => pending.includes(entry.key)));
+      for (const [key, result] of results) {
+        if (!result.ok || result.text === undefined) continue;
+        try {
+          manifests.set(key, validatePluginManifest(JSON.parse(result.text) as unknown));
+        } catch {
+          // Malformed manifest — skipped; tile falls back to a live preview.
+        }
+      }
+    }
+    return manifests;
+  }
+
+  async checkForUpdates(): Promise<PluginUpdateStatus[]> {
+    const installed = [...this.plugins.values()]
+      .filter((plugin) => plugin.enabled && plugin.sourceUrl)
+      .sort((left, right) => left.manifest.id.localeCompare(right.manifest.id));
+    const versions = await this.readVersions();
+    const updates: PluginUpdateStatus[] = [];
+    // Batch: one GraphQL metadata round-trip for all manifests, then raw
+    // fetches for present files — far fewer requests than one per plugin.
+    const remoteVersions = await fetchRemoteManifestVersions(installed.map((plugin) => plugin.sourceUrl));
+    for (const plugin of installed) {
+      const latest = remoteVersions.get(plugin.sourceUrl);
+      if (latest === undefined) {
+        console.warn(`CanvasTTY could not check plugin update: ${plugin.manifest.id}.`);
+        continue;
+      }
+      versions[plugin.manifest.id] = {
+        installedVersion: plugin.manifest.version,
+        latestVersion: latest,
+        checkedAt: Date.now()
+      };
+      if (latest !== plugin.manifest.version) {
+        updates.push({
+          pluginId: plugin.manifest.id,
+          installedVersion: plugin.manifest.version,
+          latestVersion: latest
+        });
+      }
+    }
+    await this.persistVersions(versions);
+    return updates;
+  }
+
+  async updatePlugin(pluginId: string): Promise<InstalledPlugin> {
+    const plugin = this.requirePlugin(pluginId);
+    const sourceUrl = plugin.sourceUrl;
+    const previousSelection = [...plugin.selectedModules];
+    const directory = await mkdtemp(join(this.stagingRoot, "update-"));
+    const packageRoot = join(directory, "repository");
+    const nextRoot = join(directory, "next");
+    const currentRoot = join(this.pluginRoot, pluginId);
+    const backupRoot = join(directory, "previous");
+    let currentBackedUp = false;
+    let swapped = false;
+    try {
+      await this.downloadFullRepository(sourceUrl, packageRoot);
+      await inspectPackage(packageRoot);
+      const manifest = await readManifest(packageRoot);
+      if (manifest.id !== pluginId) throw new Error("Updated plugin package does not match the installed plugin.");
+      assertPlatformCompatible(manifest);
+      const selected = normalizeSelectedModules(manifest, previousSelection);
+      if (manifest.modules?.length) {
+        await materializeModularPackage(sourceUrl, packageRoot, nextRoot, manifest, selected, this.downloadModuleFiles);
+      } else {
+        await rename(packageRoot, nextRoot);
+      }
+
+      await rename(currentRoot, backupRoot);
+      currentBackedUp = true;
+      try {
+        await rename(nextRoot, currentRoot);
+        swapped = true;
+      } catch (error) {
+        await rename(backupRoot, currentRoot);
+        currentBackedUp = false;
+        throw error;
+      }
+
+      const updated: InstalledPlugin = {
+        manifest,
+        sourceUrl,
+        enabled: plugin.enabled,
+        installedAt: plugin.installedAt,
+        selectedModules: selected
+      };
+      this.plugins.set(pluginId, updated);
+      await this.persistRegistry();
+      const versions = await this.readVersions();
+      versions[pluginId] = {
+        installedVersion: manifest.version,
+        latestVersion: manifest.version,
+        checkedAt: Date.now()
+      };
+      await this.persistVersions(versions);
+      return structuredClone(activePlugin(updated));
+    } catch (error) {
+      if (currentBackedUp) {
+        this.plugins.set(pluginId, plugin);
+        try {
+          if (swapped) await rm(currentRoot, { recursive: true, force: true });
+          await rename(backupRoot, currentRoot);
+          currentBackedUp = false;
+          await this.persistRegistry();
+        } catch (rollbackError) {
+          throw new AggregateError([error, rollbackError], `Plugin ${pluginId} update failed and could not be rolled back.`);
+        }
+      }
+      throw error;
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  private async readVersions(): Promise<Record<string, StoredVersionRecord>> {
+    try {
+      const raw = await readFile(this.versionsPath, "utf8");
+      const candidate: unknown = JSON.parse(raw);
+      if (isRecord(candidate)) {
+        const result: Record<string, StoredVersionRecord> = {};
+        for (const [pluginId, value] of Object.entries(candidate)) {
+          if (!isPluginId(pluginId) || !isRecord(value)) continue;
+          const installedVersion = typeof value.installedVersion === "string" ? value.installedVersion : "";
+          const latestVersion = typeof value.latestVersion === "string" ? value.latestVersion : undefined;
+          const checkedAt = typeof value.checkedAt === "number" ? value.checkedAt : undefined;
+          if (installedVersion) {
+            result[pluginId] = { installedVersion, ...(latestVersion ? { latestVersion } : {}), ...(checkedAt ? { checkedAt } : {}) };
+          }
+        }
+        return result;
+      }
+    } catch (error) {
+      if (!isMissingFile(error)) {
+        console.warn("CanvasTTY plugin version manifest could not be loaded; it will be rebuilt.", error);
+      }
+    }
+    return {};
+  }
+
+  private async persistVersions(versions: Record<string, StoredVersionRecord>): Promise<void> {
+    const temporaryPath = `${this.versionsPath}.tmp`;
+    await writeFile(temporaryPath, JSON.stringify(versions, null, 2), "utf8");
+    await rename(temporaryPath, this.versionsPath);
   }
 
   contribution(pluginId: string, contributionId: string): PluginContribution {
@@ -486,8 +814,29 @@ export function normalizeGithubUrl(value: unknown): string {
   return `https://github.com/${owner}/${repository}.git`;
 }
 
+/** Returns a stable "owner/repository" key for comparison, or "" when invalid. */
+function repositoryKeyOfUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "github.com") return "";
+    const parts = url.pathname.split("/").filter(Boolean);
+    if (parts.length < 2) return "";
+    const owner = parts[0];
+    const repository = parts[1].replace(/\.git$/i, "");
+    if (!isGithubName(owner) || !isGithubName(repository)) return "";
+    return `${owner}/${repository}`;
+  } catch {
+    return "";
+  }
+}
+
 export function validatePluginManifest(candidate: unknown): PluginManifest {
   if (!isRecord(candidate)) throw new Error("Plugin manifest must be a JSON object.");
+  assertOnlyKeys(candidate, [
+    "apiVersion", "id", "name", "version", "description", "description.ru", "description.en",
+    "icon", "author", "homepage", "settingsContribution", "coreFiles", "modules", "permissions",
+    "contributions", "platforms", "minHostVersion"
+  ], "Plugin manifest");
   if (candidate.apiVersion !== PLUGIN_API_VERSION) {
     throw new Error(`Plugin apiVersion must be ${PLUGIN_API_VERSION}.`);
   }
@@ -496,9 +845,40 @@ export function validatePluginManifest(candidate: unknown): PluginManifest {
   const name = requiredString(candidate.name, "name", 80);
   const version = requiredString(candidate.version, "version", 40);
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error("Plugin version must be semantic version text.");
-  const description = requiredString(candidate.description, "description", 280);
+  const description = requiredString(candidate.description, "description", 2_000);
+  const descriptionRu = optionalString(candidate["description.ru"], "description.ru", 2_000);
+  const descriptionEn = optionalString(candidate["description.en"], "description.en", 2_000);
+  const iconValue = optionalString(candidate.icon, "icon", 180);
+  const icon = iconValue ? assetPath(iconValue) : null;
   const author = optionalString(candidate.author, "author", 120);
   const homepage = optionalWebUrl(candidate.homepage, "homepage");
+
+  // Platform declaration: optional array of platform ids (lowercase, [a-z0-9-]).
+  // Absent = legacy plugin compatible with every platform.
+  let platforms: string[] | undefined;
+  if (candidate.platforms !== undefined) {
+    if (!Array.isArray(candidate.platforms) || candidate.platforms.length === 0) {
+      throw new Error("Plugin platforms must be a non-empty array of platform ids.");
+    }
+    platforms = [];
+    for (const platform of candidate.platforms) {
+      if (typeof platform !== "string" || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(platform)) {
+        throw new Error("Plugin platform ids must be lowercase, alphanumeric with hyphens.");
+      }
+      if (platforms.includes(platform)) throw new Error(`Plugin platform id is duplicated: ${platform}.`);
+      platforms.push(platform);
+    }
+  }
+
+  // Host-version constraint: optional semver (e.g. "1.2.0"). Malformed values
+  // are treated as "no constraint" (legacy plugins must keep working).
+  let minHostVersion: string | undefined;
+  if (candidate.minHostVersion !== undefined) {
+    if (!isValidSemver(candidate.minHostVersion)) {
+      throw new Error("Plugin minHostVersion must be a semantic version (e.g. 1.2.0).");
+    }
+    minHostVersion = String(candidate.minHostVersion).trim();
+  }
 
   if (!Array.isArray(candidate.permissions)) throw new Error("Plugin permissions must be an array.");
   const permissions: PluginPermission[] = [];
@@ -548,8 +928,13 @@ export function validatePluginManifest(candidate: unknown): PluginManifest {
     name,
     version,
     description,
+    ...(descriptionRu ? { "description.ru": descriptionRu } : {}),
+    ...(descriptionEn ? { "description.en": descriptionEn } : {}),
+    ...(icon ? { icon } : {}),
     ...(author ? { author } : {}),
     ...(homepage ? { homepage } : {}),
+    ...(platforms ? { platforms } : {}),
+    ...(minHostVersion ? { minHostVersion } : {}),
     permissions,
     contributions,
     ...(settingsContribution ? { settingsContribution } : {}),
@@ -560,6 +945,9 @@ export function validatePluginManifest(candidate: unknown): PluginManifest {
 
 function validateContribution(value: unknown): PluginContribution {
   if (!isRecord(value)) throw new Error("Every plugin contribution must be an object.");
+  assertOnlyKeys(value, [
+    "id", "kind", "title", "description", "entry", "icon", "module", "defaultSize", "minSize"
+  ], "Plugin contribution");
   const id = requiredString(value.id, "contribution id", 64);
   if (!isContributionId(id)) throw new Error("Contribution id contains unsupported characters.");
   const title = requiredString(value.title, "contribution title", 80);
@@ -596,11 +984,24 @@ function validateContribution(value: unknown): PluginContribution {
 }
 
 async function readManifest(packageRoot: string): Promise<PluginManifest> {
-  const path = join(packageRoot, MANIFEST_FILE);
-  const metadata = await stat(path);
-  if (!metadata.isFile() || metadata.size > MAX_MANIFEST_BYTES) throw new Error(`${MANIFEST_FILE} is missing or too large.`);
-  const raw = await readFile(path, "utf8");
+  const found = await firstExistingFile(packageRoot, MANIFEST_CANDIDATES);
+  if (!found) throw new Error(`${MANIFEST_FILE} is missing or too large.`);
+  const raw = await readFile(found, "utf8");
   return validatePluginManifest(JSON.parse(raw) as unknown);
+}
+
+/** Returns the first existing file among the candidates (in declaration order). */
+async function firstExistingFile(root: string, candidates: readonly string[]): Promise<string | null> {
+  for (const candidate of candidates) {
+    const path = join(root, candidate);
+    try {
+      const metadata = await stat(path);
+      if (metadata.isFile() && metadata.size <= MAX_MANIFEST_BYTES) return path;
+    } catch {
+      // Missing candidate — try the next one.
+    }
+  }
+  return null;
 }
 
 async function inspectPackage(root: string): Promise<void> {
@@ -670,6 +1071,13 @@ async function retryGithubDownload<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 class TransientGithubDownloadError extends Error {}
+class MissingGithubFileError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`GitHub file download failed with HTTP ${status}.`);
+    this.status = status;
+  }
+}
 
 async function downloadGithubRepositoryOnce(sourceUrl: string, destination: string): Promise<void> {
   const source = new URL(sourceUrl);
@@ -693,6 +1101,13 @@ async function downloadGithubRepositoryOnce(sourceUrl: string, destination: stri
     } catch (error) {
       if (controller.signal.aborted) throw new TransientGithubDownloadError("GitHub plugin download timed out.");
       throw new TransientGithubDownloadError("GitHub plugin download could not establish a connection.", { cause: error });
+    }
+    const finalUrl = new URL(response.url || `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/tarball`);
+    if (
+      finalUrl.protocol !== "https:"
+      || (finalUrl.hostname !== "api.github.com" && finalUrl.hostname !== "codeload.github.com")
+    ) {
+      throw new Error("GitHub plugin archive redirected outside GitHub's download hosts.");
     }
     if (response.status === 404) throw new Error("GitHub repository was not found or is not public.");
     if (!response.ok || !response.body) {
@@ -813,6 +1228,7 @@ function validateGridSize(value: unknown): { columns: number; rows: number } {
   if (!isRecord(value) || !Number.isInteger(value.columns) || !Number.isInteger(value.rows)) {
     throw new Error("Home widget defaultSize must contain integer columns and rows.");
   }
+  assertOnlyKeys(value, ["columns", "rows"], "Home widget defaultSize");
   const columns = value.columns as number;
   const rows = value.rows as number;
   if (columns < 1 || columns > HOME_GRID_MAX_COLUMNS || rows < 1 || rows > HOME_GRID_MAX_ROWS) {
@@ -823,10 +1239,281 @@ function validateGridSize(value: unknown): { columns: number; rows: number } {
 
 async function downloadGithubManifest(sourceUrl: string, destination: string): Promise<void> {
   const repository = await githubRepositoryMetadata(sourceUrl);
-  const url = githubRawUrl(repository.owner, repository.name, repository.branch, MANIFEST_FILE);
-  const content = await fetchBoundedGithubFile(url, MAX_MANIFEST_BYTES);
   await mkdir(destination, { recursive: true });
-  await writeFile(join(destination, MANIFEST_FILE), content);
+  // Metadata-first: metadata/canvastty.plugin.json, then legacy root file.
+  let fetched = false;
+  for (const candidate of MANIFEST_CANDIDATES) {
+    try {
+      const url = githubRawUrl(repository.owner, repository.name, repository.branch, candidate);
+      const content = await fetchBoundedGithubFile(url, MAX_MANIFEST_BYTES);
+      await mkdir(join(destination, METADATA_DIR), { recursive: true });
+      const target = join(destination, METADATA_DIR, MANIFEST_FILE);
+      await writeFile(target, content);
+      fetched = true;
+      break;
+    } catch (error) {
+      // Missing candidate — try the next one; anything else is fatal.
+      if (!(error instanceof MissingGithubFileError)) throw error;
+    }
+  }
+  if (!fetched) throw new Error(`${MANIFEST_FILE} is missing or too large.`);
+}
+
+interface GithubSearchItem {
+  full_name?: unknown;
+  description?: unknown;
+  stargazers_count?: unknown;
+  updated_at?: unknown;
+}
+
+let githubTokenProvider: (() => Promise<string | null>) | null = null;
+
+/** Registers the OAuth-backed GitHub token provider for module-level helpers. */
+export function registerGithubTokenProvider(provider: () => Promise<string | null>): void {
+  githubTokenProvider = provider;
+}
+
+async function resolveGithubToken(): Promise<string | null> {
+  const envToken = process.env.GITHUB_TOKEN ?? process.env.CANVASTTY_GITHUB_TOKEN;
+  if (envToken) return envToken;
+  if (githubTokenProvider) {
+    try {
+      return await githubTokenProvider();
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+async function searchGithubPluginRepositories(query: string): Promise<GithubSearchItem[]> {
+  const term = query.trim();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  timer.unref();
+  try {
+    const token = await resolveGithubToken();
+    if (token) {
+      // GraphQL search uses the GraphQL point budget (5000/h) instead of the
+      // Search API quota (30/min), so repeated searches do not hit the limit.
+      const page = await githubGraphqlSearchPage(`canvastty-plugin-${term} in:name`, SEARCH_MAX_RESULTS, null, token, controller.signal);
+      return page.items.slice(0, SEARCH_MAX_RESULTS);
+    }
+    const url = new URL("https://api.github.com/search/repositories");
+    url.searchParams.set("q", `canvastty-plugin-${term} in:name`);
+    url.searchParams.set("per_page", String(SEARCH_MAX_RESULTS));
+    const items = await fetchGithubSearchPage(url, controller.signal);
+    return items.slice(0, SEARCH_MAX_RESULTS);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function listShowcasePluginRepositories(): Promise<GithubSearchItem[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  timer.unref();
+  try {
+    const token = await resolveGithubToken();
+    if (token) {
+      // GraphQL cursor pagination: same 100-per-page walk as the REST path,
+      // but charged against the GraphQL point budget instead of the Search API
+      // quota — the showcase no longer consumes the 30/min search limit.
+      const items: GithubSearchItem[] = [];
+      let cursor: string | null = null;
+      for (let page = 1; page <= 10; page += 1) {
+        const batch = await githubGraphqlSearchPage("canvastty-plugin in:name", 100, cursor, token, controller.signal);
+        if (batch.items.length === 0) break;
+        items.push(...batch.items);
+        if (!batch.hasNextPage || !batch.endCursor) break;
+        cursor = batch.endCursor;
+        if (batch.items.length < 100) break;
+      }
+      return items;
+    }
+    const items: GithubSearchItem[] = [];
+    const perPage = 100;
+    for (let page = 1; page <= 10; page += 1) {
+      const url = new URL("https://api.github.com/search/repositories");
+      url.searchParams.set("q", "canvastty-plugin in:name");
+      url.searchParams.set("per_page", String(perPage));
+      url.searchParams.set("page", String(page));
+      const batch = await fetchGithubSearchPage(url, controller.signal);
+      if (batch.length === 0) break;
+      items.push(...batch);
+      if (batch.length < perPage) break;
+    }
+    return items;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** One page of repository search results via the GraphQL API. */
+async function githubGraphqlSearchPage(
+  query: string,
+  first: number,
+  after: string | null,
+  token: string,
+  signal: AbortSignal
+): Promise<{ items: GithubSearchItem[]; hasNextPage: boolean; endCursor: string | null }> {
+  const gql = after
+    ? `query($q: String!, $first: Int!, $after: String!) { search(query: $q, type: REPOSITORY, first: $first, after: $after) { repositoryCount pageInfo { hasNextPage endCursor } nodes { ... on Repository { nameWithOwner description stargazerCount updatedAt } } } }`
+    : `query($q: String!, $first: Int!) { search(query: $q, type: REPOSITORY, first: $first) { repositoryCount pageInfo { hasNextPage endCursor } nodes { ... on Repository { nameWithOwner description stargazerCount updatedAt } } } }`;
+  const variables: Record<string, unknown> = { q: query, first };
+  if (after) variables.after = after;
+  const response = await fetch(GITHUB_GRAPHQL_ENDPOINT, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "user-agent": "CanvasTTY plugin search",
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({ query: gql, variables }),
+    signal
+  });
+  if (response.status === 403 || response.status === 429) {
+    throw new Error("GitHub search rate limit reached; try again in a minute.");
+  }
+  if (!response.ok) {
+    throw new Error(`GitHub plugin search failed with HTTP ${response.status}.`);
+  }
+  const payload: unknown = await response.json();
+  if (!isRecord(payload)) throw new Error("GitHub plugin search returned an invalid response.");
+  if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+    throw new Error(`GitHub plugin search failed: ${JSON.stringify(payload.errors).slice(0, 200)}`);
+  }
+  const data = isRecord(payload.data) ? payload.data : null;
+  const search = isRecord(data) && isRecord(data.search) ? data.search : null;
+  if (!search) return { items: [], hasNextPage: false, endCursor: null };
+  const items: GithubSearchItem[] = [];
+  if (Array.isArray(search.nodes)) {
+    for (const node of search.nodes) {
+      if (!isRecord(node)) continue;
+      const fullName = String(node.nameWithOwner ?? "");
+      if (!fullName) continue;
+      items.push({
+        full_name: fullName,
+        description: String(node.description ?? ""),
+        stargazers_count: Number(node.stargazerCount ?? 0),
+        updated_at: String(node.updatedAt ?? "")
+      });
+    }
+  }
+  const pageInfo = isRecord(search.pageInfo) ? search.pageInfo : null;
+  return {
+    items,
+    hasNextPage: Boolean(pageInfo && pageInfo.hasNextPage),
+    endCursor: pageInfo && typeof pageInfo.endCursor === "string" ? pageInfo.endCursor : null
+  };
+}
+
+async function fetchGithubSearchPage(url: URL, signal: AbortSignal): Promise<GithubSearchItem[]> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      redirect: "follow",
+      headers: {
+        accept: "application/vnd.github+json",
+        "user-agent": "CanvasTTY plugin search"
+      },
+      signal
+    });
+  } catch (error) {
+    if (signal.aborted) throw new Error("GitHub plugin search timed out.");
+    throw new Error("GitHub plugin search could not establish a connection.", { cause: error });
+  }
+  if (response.status === 403 || response.status === 429) {
+    throw new Error("GitHub search rate limit reached; try again in a minute.");
+  }
+  if (!response.ok || !response.body) {
+    throw new Error(`GitHub plugin search failed with HTTP ${response.status}.`);
+  }
+  const payload: unknown = await response.json();
+  if (!isRecord(payload) || !Array.isArray(payload.items)) return [];
+  const items: GithubSearchItem[] = [];
+  for (const item of payload.items) {
+    if (isRecord(item)) items.push(item as GithubSearchItem);
+  }
+  return items;
+}
+
+function mapSearchResults(results: GithubSearchItem[]): GithubPluginSearchResult[] {
+  const entries: GithubPluginSearchResult[] = [];
+  for (const item of results) {
+    const fullName = String(item.full_name ?? "");
+    if (!fullName) continue;
+    const parts = fullName.split("/");
+    if (parts.length !== 2 || !isGithubName(parts[0]) || !isGithubName(parts[1])) continue;
+    if (!parts[1].startsWith("canvastty-plugin-")) continue;
+    entries.push({
+      fullName,
+      url: `https://github.com/${parts[0]}/${parts[1]}`,
+      description: String(item.description ?? ""),
+      stars: Number(item.stargazers_count ?? 0),
+      updatedAt: String(item.updated_at ?? "")
+    });
+  }
+  return entries;
+}
+
+/** Local showcase stubs for tests (env CANVASTTY_SHOWCASE_STUBS=N). */
+function makeShowcaseStubs(count: number): GithubPluginSearchResult[] {
+  const stubs: GithubPluginSearchResult[] = [];
+  for (let i = 1; i <= count; i += 1) {
+    stubs.push({
+      fullName: `4444cjtr/canvastty-plugin-showcase-stub-${String(i).padStart(2, "0")}`,
+      url: `https://github.com/4444cjtr/canvastty-plugin-showcase-stub-${String(i).padStart(2, "0")}`,
+      description: `Showcase stub #${i} for testing pagination.`,
+      stars: 10 + (i % 40),
+      updatedAt: new Date(Date.now() - i * 86_400_000).toISOString()
+    });
+  }
+  return stubs;
+}
+async function fetchRemoteManifestVersions(sourceUrls: readonly string[]): Promise<Map<string, string>> {
+  const versions = new Map<string, string>();
+  const parsed = new Map<string, { owner: string; repository: string }>();
+  for (const sourceUrl of sourceUrls) {
+    try {
+      const source = new URL(sourceUrl);
+      const parts = source.pathname.split("/").filter(Boolean);
+      const owner = parts[0] ?? "";
+      const repository = (parts[1] ?? "").replace(/\.git$/i, "");
+      if (owner && repository) parsed.set(sourceUrl, { owner, repository });
+    } catch {
+      // Unparseable URL — skipped.
+    }
+  }
+  if (parsed.size === 0) return versions;
+  const toEntries = (path: string): Array<{ key: string; owner: string; repository: string; path: string; maximumBytes: number; asDataUrl: boolean }> =>
+    [...parsed.entries()].map(([key, repo]) => ({
+      key, owner: repo.owner, repository: repo.repository, path, maximumBytes: MAX_MANIFEST_BYTES, asDataUrl: false
+    }));
+  // Metadata-first: metadata/canvastty.plugin.json, then legacy root file.
+  // One batched metadata round-trip per candidate, then one raw fetch per present manifest.
+  for (const candidate of MANIFEST_CANDIDATES) {
+    const pending = [...parsed.keys()].filter((key) => !versions.has(key));
+    if (pending.length === 0) break;
+    const results = await githubGraphqlBatch(toEntries(candidate).filter((entry) => pending.includes(entry.key)));
+    for (const [key, result] of results) {
+      if (!result.ok || result.text === undefined) continue;
+      try {
+        const manifest = validatePluginManifest(JSON.parse(result.text) as unknown);
+        versions.set(key, manifest.version);
+      } catch {
+        // Malformed manifest — treated as "no remote version".
+      }
+    }
+  }
+  return versions;
+}
+
+async function fetchRemoteManifestVersion(sourceUrl: string): Promise<string> {
+  const versions = await fetchRemoteManifestVersions([sourceUrl]);
+  const version = versions.get(sourceUrl);
+  if (version === undefined) throw new Error("GitHub manifest could not be fetched.");
+  return version;
 }
 
 async function downloadGithubModuleFiles(
@@ -849,8 +1536,14 @@ async function downloadGithubModuleFiles(
   }
 }
 
+const githubMetadataCache = new Map<string, { owner: string; name: string; branch: string }>();
+
 async function githubRepositoryMetadata(sourceUrl: string): Promise<{ owner: string; name: string; branch: string }> {
-  return retryGithubDownload(() => githubRepositoryMetadataOnce(sourceUrl));
+  const cached = githubMetadataCache.get(sourceUrl);
+  if (cached) return cached;
+  const metadata = await retryGithubDownload(() => githubRepositoryMetadataOnce(sourceUrl));
+  githubMetadataCache.set(sourceUrl, metadata);
+  return metadata;
 }
 
 async function githubRepositoryMetadataOnce(sourceUrl: string): Promise<{ owner: string; name: string; branch: string }> {
@@ -904,6 +1597,149 @@ function githubRawUrl(owner: string, repository: string, branch: string, path: s
   ].join("/");
 }
 
+const GITHUB_GRAPHQL_ENDPOINT = "https://api.github.com/graphql";
+const GITHUB_GRAPHQL_BATCH_LIMIT = 8;
+
+interface GithubBlobResult {
+  ok: boolean;
+  dataUrl?: string;
+  text?: string;
+  missing?: boolean;
+}
+
+/**
+ * Batch-fetches files across multiple repositories with a single GraphQL
+ * request. Each entry describes one file to read at HEAD of a repository.
+ * Returns results keyed by the entry key. Uses the unauthenticated REST
+ * fallback path per file only when no token is available (GraphQL requires
+ * authentication); with a token this collapses N HTTP requests into one.
+ */
+async function githubGraphqlBatch(
+  entries: Array<{ key: string; owner: string; repository: string; path: string; maximumBytes: number; asDataUrl: boolean }>
+): Promise<Map<string, GithubBlobResult>> {
+  const results = new Map<string, GithubBlobResult>();
+  if (entries.length === 0) return results;
+
+  const token = await resolveGithubToken();
+  if (!token) {
+    // No token: GraphQL is unavailable. Fall back to one raw fetch per entry
+    // (still avoids the repository-metadata round trip via cached metadata).
+    for (let offset = 0; offset < entries.length; offset += GITHUB_GRAPHQL_BATCH_LIMIT) {
+      const chunk = entries.slice(offset, offset + GITHUB_GRAPHQL_BATCH_LIMIT);
+      await Promise.all(chunk.map(async (entry) => {
+        try {
+          const sourceUrl = `https://github.com/${encodeURIComponent(entry.owner)}/${encodeURIComponent(entry.repository)}`;
+          const metadata = await githubRepositoryMetadata(sourceUrl);
+          const url = githubRawUrl(entry.owner, entry.repository, metadata.branch, entry.path);
+          const content = await fetchBoundedGithubFile(url, entry.maximumBytes);
+          results.set(entry.key, entry.asDataUrl
+            ? { ok: true, dataUrl: `data:${mimeForPath(entry.path)};base64,${content.toString("base64")}` }
+            : { ok: true, text: content.toString("utf8") });
+        } catch {
+          results.set(entry.key, { ok: false, missing: true });
+        }
+      }));
+    }
+    return results;
+  }
+
+  for (let offset = 0; offset < entries.length; offset += GITHUB_GRAPHQL_BATCH_LIMIT) {
+    const chunk = entries.slice(offset, offset + GITHUB_GRAPHQL_BATCH_LIMIT);
+    const chunkResults = await githubGraphqlBatchWithToken(chunk, token);
+    for (const [key, result] of chunkResults) results.set(key, result);
+  }
+  return results;
+}
+
+async function githubGraphqlBatchWithToken(
+  entries: Array<{ key: string; owner: string; repository: string; path: string; maximumBytes: number; asDataUrl: boolean }>,
+  token: string
+): Promise<Map<string, GithubBlobResult>> {
+  const results = new Map<string, GithubBlobResult>();
+
+  // Batched GraphQL: one HTTP request, N repository(file) nodes.
+  const aliases: string[] = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    aliases.push(
+      `a${index}: repository(owner: ${JSON.stringify(entry.owner)}, name: ${JSON.stringify(entry.repository)}) { defaultBranchRef { name } object(expression: "HEAD:${entry.path.replace(/["\\]/g, "")}") { ... on Blob { isBinary byteSize } } }`
+    );
+  }
+  const query = `query { ${aliases.join(" ")} }`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS * 2);
+  timer.unref();
+  try {
+    const response = await fetch(GITHUB_GRAPHQL_ENDPOINT, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "user-agent": "CanvasTTY plugin installer",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ query }),
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      const message = `GitHub GraphQL batch failed with HTTP ${response.status}.`;
+      if (response.status === 408 || response.status === 429 || response.status >= 500) {
+        throw new TransientGithubDownloadError(message);
+      }
+      throw new Error(message);
+    }
+    const body: unknown = await response.json();
+    if (!isRecord(body)) throw new Error("GitHub GraphQL batch returned an invalid response.");
+    const data = isRecord(body.data) ? body.data : null;
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index];
+      const alias = `a${index}`;
+      const node = isRecord(data) ? data[alias] : undefined;
+      if (!isRecord(node) || node === null) {
+        results.set(entry.key, { ok: false, missing: true });
+        continue;
+      }
+      const blob = isRecord(node.object) ? node.object : null;
+      if (!blob || !isRecord(blob) || typeof blob.isBinary !== "boolean") {
+        results.set(entry.key, { ok: false, missing: true });
+        continue;
+      }
+      if (typeof blob.byteSize === "number" && blob.byteSize > entry.maximumBytes) {
+        results.set(entry.key, { ok: false, missing: true });
+        continue;
+      }
+      // We have the metadata; now fetch the actual bytes from raw (GraphQL
+      // cannot return raw file bytes for binary content without base64 cost,
+      // and text blobs have a size cap). Use one raw request per present file,
+      // which is unavoidable — but metadata was already batched.
+      try {
+        const branch = isRecord(node.defaultBranchRef) && typeof node.defaultBranchRef.name === "string"
+          ? node.defaultBranchRef.name
+          : "HEAD";
+        const url = githubRawUrl(entry.owner, entry.repository, branch, entry.path);
+        const content = await fetchBoundedGithubFile(url, entry.maximumBytes);
+        results.set(entry.key, entry.asDataUrl
+          ? { ok: true, dataUrl: `data:${mimeForPath(entry.path)};base64,${content.toString("base64")}` }
+          : { ok: true, text: content.toString("utf8") });
+      } catch {
+        results.set(entry.key, { ok: false, missing: true });
+      }
+    }
+    return results;
+  } catch (error) {
+    if (error instanceof TransientGithubDownloadError) throw error;
+    if (controller.signal.aborted) {
+      throw new TransientGithubDownloadError("GitHub GraphQL batch timed out.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function mimeForPath(path: string): string {
+  return path.endsWith(".svg") ? "image/svg+xml" : "image/png";
+}
+
 async function fetchBoundedGithubFile(url: string, maximumBytes: number): Promise<Buffer> {
   return retryGithubDownload(() => fetchBoundedGithubFileOnce(url, maximumBytes));
 }
@@ -930,6 +1766,9 @@ async function fetchBoundedGithubFileOnce(url: string, maximumBytes: number): Pr
     }
     if (!response.ok || !response.body) {
       const message = `GitHub file download failed with HTTP ${response.status}.`;
+      if (response.status === 404 || response.status === 403) {
+        throw new MissingGithubFileError(response.status);
+      }
       if (response.status === 408 || response.status === 429 || response.status >= 500) {
         throw new TransientGithubDownloadError(message);
       }
@@ -997,7 +1836,10 @@ async function materializeModularPackage(
     throw new Error("Selected plugin modules exceed the package limits.");
   }
   await mkdir(destination, { recursive: true });
-  await copyFile(join(previewRoot, MANIFEST_FILE), join(destination, MANIFEST_FILE));
+  await mkdir(join(destination, METADATA_DIR), { recursive: true });
+  const sourceManifest = await firstExistingFile(previewRoot, MANIFEST_CANDIDATES);
+  if (!sourceManifest) throw new Error(`${MANIFEST_FILE} is missing or too large.`);
+  await copyFile(sourceManifest, join(destination, METADATA_DIR, MANIFEST_FILE));
   await downloadFiles(sourceUrl, destination, files);
   await inspectPackage(destination);
   await assertContributionAssets(destination, activeManifest(manifest, selectedModules).contributions);
@@ -1027,6 +1869,7 @@ function validateModules(value: unknown): PluginModule[] {
   const ids = new Set<string>();
   return value.map((candidate) => {
     if (!isRecord(candidate)) throw new Error("Every plugin module must be an object.");
+    assertOnlyKeys(candidate, ["id", "title", "description", "defaultSelected", "permissions", "files"], "Plugin module");
     const id = requiredString(candidate.id, "module id", 64);
     if (!isContributionId(id) || ids.has(id)) throw new Error(`Plugin module id is invalid or duplicated: ${id}.`);
     ids.add(id);
@@ -1077,8 +1920,9 @@ function validateModuleFiles(value: unknown, label: string): PluginModuleAsset[]
   let totalBytes = 0;
   return value.map((candidate) => {
     if (!isRecord(candidate)) throw new Error(`Every plugin ${label} entry must be an object.`);
+    assertOnlyKeys(candidate, ["path", "bytes", "sha256"], `Plugin ${label} entry`);
     const path = assetPath(requiredString(candidate.path, `${label} path`, 180));
-    if (path === MANIFEST_FILE || seen.has(path)) throw new Error(`Plugin module asset is invalid or duplicated: ${path}.`);
+    if (MANIFEST_CANDIDATES.includes(path) || seen.has(path)) throw new Error(`Plugin module asset is invalid or duplicated: ${path}.`);
     seen.add(path);
     if (!Number.isInteger(candidate.bytes) || (candidate.bytes as number) < 0 || (candidate.bytes as number) > MAX_ASSET_BYTES) {
       throw new Error(`Plugin module asset size is invalid: ${path}.`);
@@ -1101,6 +1945,7 @@ function validateWindowSize(
   if (!isRecord(value) || !Number.isFinite(value.width) || !Number.isFinite(value.height)) {
     throw new Error(`Plugin window ${label} must contain a finite width and height.`);
   }
+  assertOnlyKeys(value, ["width", "height"], `Plugin window ${label}`);
   const width = Math.round(value.width as number);
   const height = Math.round(value.height as number);
   if (width < minimumWidth || width > 1_600 || height < minimumHeight || height > 1_100) {
@@ -1241,6 +2086,18 @@ function isStoredRecord(value: unknown): value is StoredPluginRecord {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function assertOnlyKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): void {
+  const allowedKeys = new Set(allowed);
+  const unknown = Object.keys(value).find((key) => !allowedKeys.has(key));
+  if (unknown) throw new Error(`${label} contains an unknown field: ${unknown}.`);
+}
+
+function assertPlatformCompatible(manifest: PluginManifest): void {
+  if (manifest.platforms?.length && !manifest.platforms.includes(PLATFORM_ID)) {
+    throw new Error(`Plugin ${manifest.id} does not support the ${PLATFORM_ID} platform.`);
+  }
 }
 
 function isMissingFile(error: unknown): boolean {

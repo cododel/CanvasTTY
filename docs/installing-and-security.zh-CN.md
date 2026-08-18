@@ -10,9 +10,9 @@
 |:--|:--|:--|
 | Linux x86_64 | AppImage、deb | AppImage 是单文件包，需要 FUSE 2 兼容库（Ubuntu 24.04 上为 `libfuse2t64`）；deb 可集成到 Debian 系桌面环境 |
 | Windows x64 | NSIS 安装程序、便携版可执行文件 | 安装程序支持自定义安装目录，并会创建开始菜单/桌面快捷方式 |
-| macOS arm64（Apple Silicon） | dmg、zip | 两者都包含图形化的 `.app` bundle；`1.0.2` 暂不包含 Intel/x64 构建 |
+| macOS arm64（Apple Silicon） | dmg、zip | 两者都包含图形化的 `.app` bundle；不包含 Intel/x64 构建 |
 
-请只从本仓库的 [GitHub Releases](https://github.com/howdeploy/CanvasTTY/releases) 页面下载产物。版本 `1.0.2` 没有商业代码签名证书，也未经过 Apple 公证（notarization）。因此 Windows SmartScreen 和 macOS Gatekeeper 可能会提示开发者未知。在确认任何警告之前，请先核对 release tag 和产物名称。
+请只从本仓库的 [GitHub Releases](https://github.com/howdeploy/CanvasTTY/releases) 页面下载产物。从 `1.2.4` 起，macOS bundle 会进行 ad-hoc 签名，并在上传前通过严格的 `codesign` 验证。这可以验证 bundle 完整性，但不提供 Developer ID 身份，也没有 Apple notarization，因此 Gatekeeper 仍可能要求通过 Finder → Open 或 Privacy & Security → Open Anyway 手动允许。Windows 软件包仍未签名，可能触发 SmartScreen。`1.2.2` 与 `1.2.3` 的 macOS 产物早于此签名修复；请使用 `1.2.4` 或更高版本。在确认任何警告之前，请先核对 release tag 和产物名称。
 
 ## 分发包包含什么
 

@@ -9,12 +9,15 @@ import type {
   CanvasWheelCaptureMode,
   EdgePanSpeed,
   FocusActivation,
+  GithubPluginSearchResult,
   InstalledPlugin,
   LocaleId,
   PaletteId,
   PluginContribution,
   PluginGridSize,
+  PluginManifest,
   PluginInstallPreview,
+  PluginUpdateStatus,
   ShortcutAction,
   ZoomSensitivity
 } from "../../../../shared/contracts";
@@ -41,12 +44,19 @@ interface SettingsPanelProps {
   onChange(patch: Partial<AppSettings>): Promise<void>;
   onPreviewPlugin(sourceUrl: string): Promise<PluginInstallPreview>;
   onInstallPlugin(token: string, selectedModules: string[]): Promise<void>;
+  onSearchPlugins(query: string): Promise<GithubPluginSearchResult[]>;
+  onShowcasePlugins(): Promise<GithubPluginSearchResult[]>;
+  onFetchPluginIcons(sourceUrls: string[]): Promise<Record<string, string | null>>;
+  onPreviewManifests(sourceUrls: string[]): Promise<Record<string, PluginManifest>>;
+  onCheckPluginUpdates(): Promise<PluginUpdateStatus[]>;
+  onUpdatePlugin(pluginId: string): Promise<void>;
   onSetPluginModules(pluginId: string, selectedModules: string[]): Promise<void>;
   onSetPluginEnabled(pluginId: string, enabled: boolean): Promise<void>;
   onUninstallPlugin(pluginId: string): Promise<void>;
   onOpenPluginContribution(plugin: InstalledPlugin, contribution: PluginContribution): Promise<void>;
   onToggleHomeWidget(widgetId: string, size: PluginGridSize): Promise<void>;
   onEditHome(): void;
+  onOpenBrowser(url?: string): Promise<void>;
 }
 
 export function SettingsPanel({
@@ -58,12 +68,19 @@ export function SettingsPanel({
   onChange,
   onPreviewPlugin,
   onInstallPlugin,
+  onSearchPlugins,
+  onShowcasePlugins,
+  onFetchPluginIcons,
+  onPreviewManifests,
+  onCheckPluginUpdates,
+  onUpdatePlugin,
   onSetPluginModules,
   onSetPluginEnabled,
   onUninstallPlugin,
   onOpenPluginContribution,
   onToggleHomeWidget,
-  onEditHome
+  onEditHome,
+  onOpenBrowser,
 }: SettingsPanelProps): React.JSX.Element {
   const locale = settings.locale;
   const [section, setSection] = useState<SettingsSection>("general");
@@ -469,6 +486,13 @@ export function SettingsPanel({
               plugins={plugins}
               onPreviewPlugin={onPreviewPlugin}
               onInstallPlugin={onInstallPlugin}
+              onSearchPlugins={onSearchPlugins}
+              onShowcasePlugins={onShowcasePlugins}
+              onFetchPluginIcons={onFetchPluginIcons}
+              onPreviewManifests={onPreviewManifests}
+              onOpenBrowser={onOpenBrowser}
+              onCheckPluginUpdates={onCheckPluginUpdates}
+              onUpdatePlugin={onUpdatePlugin}
               onSetPluginModules={onSetPluginModules}
               onSetPluginEnabled={onSetPluginEnabled}
               onUninstallPlugin={onUninstallPlugin}

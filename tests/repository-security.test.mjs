@@ -95,6 +95,23 @@ test("release workflow uploads installers only and keeps Windows targets distinc
   }
 });
 
+test("macOS release artifacts are ad-hoc signed and verified before upload", async () => {
+  const config = normalizeLineEndings(
+    await readFile(new URL("../electron-builder.yml", import.meta.url), "utf8")
+  );
+  const workflow = normalizeLineEndings(
+    await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8")
+  );
+
+  assert.match(config, /^mac:\n(?:[\s\S]*?)^  identity: "-"$/m);
+  assert.match(config, /^  hardenedRuntime: false$/m);
+  assert.match(config, /^  notarize: false$/m);
+  assert.doesNotMatch(workflow, /^\s+CSC_IDENTITY_AUTO_DISCOVERY:/m);
+  assert.match(workflow, /Verify macOS app signature/);
+  assert.match(workflow, /codesign --verify --deep --strict --verbose=4/);
+  assert.ok(workflow.indexOf("Verify macOS app signature") < workflow.indexOf("Upload installers"));
+});
+
 test("AppImage avoids maximum XZ compression and is smoke-tested before upload", async () => {
   const config = normalizeLineEndings(
     await readFile(new URL("../electron-builder.yml", import.meta.url), "utf8")

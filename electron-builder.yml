@@ -64,6 +64,12 @@ portable:
 mac:
   icon: build/icon.png
   category: public.app-category.developer-tools
+  # A free distribution has no Developer ID identity. Sign the bundle explicitly
+  # with an ad-hoc identity so macOS can verify its contents are internally
+  # consistent; Gatekeeper still requires a one-time user acknowledgement.
+  identity: "-"
+  hardenedRuntime: false
+  notarize: false
   target:
     - dmg
     - zip

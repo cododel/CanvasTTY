@@ -76,6 +76,8 @@ Editor tooling can use the [manifest JSON Schema](canvastty-plugin.schema.json) 
 
 Plugin and contribution IDs are stable persistence keys. Do not rename them after publishing. Plugin versions use semantic version text. `settingsContribution` optionally references one `canvas-app`; CanvasTTY shows a dedicated **Settings** action for it in the Extensions menu. Every installed `home-widget` also appears beside the built-in widgets in **Settings → Appearance → HOME composition**, where it is added or removed. `minSize` is optional for `canvas-app` and `window` contributions, must not exceed `defaultSize`, and may be as small as 240 × 140 pixels. Older manifests keep the 320 × 220 host minimum. HOME starts with a spacious 16 × 12 logical grid while preserving the original 12 × 8 composition. The editor can resize its visible boundary up to 48 × 36 without shrinking cell dimensions, and adding a widget grows the boundary automatically when needed. Canvas apps use world-space pixels and participate in the same snapping system as terminal cards.
 
+`platforms` is optional; when present it must include `"canvastty"` or direct install/update is rejected. `minHostVersion` is informational: the showcase marks plugins that target a newer host, but it does not block installation. This lets separately packaged release builds keep using compatible source packages without treating older minimum versions as mismatches.
+
 ### Optional modules
 
 A modular manifest declares integrity-checked coreFiles plus up to 16 optional modules. Every file entry contains path, exact bytes, and a SHA-256 digest. CanvasTTY downloads only the manifest for inspection, shows checkboxes, per-module size and permissions, then downloads only the core and selected module files. Changing the selection later replaces the installed package atomically and removes deselected files. A contribution may set module to disappear when that module is not installed.
@@ -184,6 +186,8 @@ Context updates include the active CanvasTTY locale and palette. Plugins own the
 6. Open **Settings → Appearance → HOME composition**, then choose **Edit HOME** to drag tiles, resize them, or pull the bottom-right HOME boundary. The Settings tile is retained as the recovery entry point; all other core and plugin tiles are optional.
 
 The current installer intentionally rejects private repositories, GitHub `/tree/branch/subdirectory` links, and repositories that require a build step. Publish a ready-to-run static package at the repository root.
+
+The showcase sign-in uses GitHub's OAuth device flow. Build maintainers must provide a public OAuth App client ID through `GITHUB_OAUTH_CLIENT_ID` or `CANVASTTY_GITHUB_CLIENT_ID`; no client secret is shipped or required. Without a client ID the showcase sign-in stays unavailable, while direct repository inspection and installation continue to work. Signing out removes the encrypted local session; revoke the OAuth grant separately under [GitHub application settings](https://github.com/settings/applications) when needed.
 
 ## Author checklist
 

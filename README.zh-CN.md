@@ -37,7 +37,7 @@ CanvasTTY 不会安装服务商 CLI。若某个 CLI 缺失，启动对话框会�
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/howdeploy/CanvasTTY/releases) 下载 `1.0.2` 版本：Linux x86_64 提供 AppImage/deb，Windows x64 提供安装程序/便携版，Apple Silicon macOS 提供 dmg/zip。软件包尚未进行代码签名或公证，目前也不包含 Intel Mac 构建；请先阅读[安装与本地数据安全](docs/installing-and-security.zh-CN.md)。
+从 [GitHub Releases](https://github.com/howdeploy/CanvasTTY/releases) 下载最新版本：Linux x86_64 提供 AppImage/deb，Windows x64 提供安装程序/便携版，Apple Silicon macOS 提供 dmg/zip。macOS bundle 已进行 ad-hoc 签名并通过完整性验证，但没有 Developer ID 签名或 Apple notarization；Windows 软件包仍未签名。目前也不包含 Intel Mac 构建；请先阅读[安装与本地数据安全](docs/installing-and-security.zh-CN.md)。
 
 也可以从源码运行：
 

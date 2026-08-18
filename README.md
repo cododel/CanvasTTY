@@ -37,7 +37,7 @@ CanvasTTY does not install provider CLIs. If a provider is missing, the launch d
 
 ## Install
 
-Download the `1.0.2` release from [GitHub Releases](https://github.com/howdeploy/CanvasTTY/releases): AppImage/deb for Linux x86_64, installer/portable app for Windows x64, and dmg/zip for Apple Silicon macOS. Packages are not yet code-signed or notarized; Intel Mac builds are not included yet. Read [installing and local-data security](docs/installing-and-security.md).
+Download the latest release from [GitHub Releases](https://github.com/howdeploy/CanvasTTY/releases): AppImage/deb for Linux x86_64, installer/portable app for Windows x64, and dmg/zip for Apple Silicon macOS. macOS bundles are ad-hoc signed and verified but do not have a Developer ID signature or Apple notarization; Windows packages remain unsigned. Intel Mac builds are not included yet. Read [installing and local-data security](docs/installing-and-security.md).
 
 Or run from source:
 

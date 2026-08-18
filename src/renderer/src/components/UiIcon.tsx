@@ -13,6 +13,7 @@ import maximizeIcon from "../assets/icons/lucide/square.svg";
 import minimizeIcon from "../assets/icons/lucide/minus.svg";
 import plusIcon from "../assets/icons/lucide/plus.svg";
 import settingsIcon from "../assets/icons/lucide/settings.svg";
+import terminalIcon from "../assets/icons/lucide/square-terminal.svg";
 import trashIcon from "../assets/icons/lucide/trash-2.svg";
 import workingIcon from "../assets/icons/lucide/loader-circle.svg";
 import zoomInIcon from "../assets/icons/lucide/zoom-in.svg";
@@ -29,6 +30,7 @@ export type UiIconName =
   | "restore"
   | "folder"
   | "browser"
+  | "terminal"
   | "reload"
   | "arrow"
   | "chevron"
@@ -57,6 +59,7 @@ const ICONS: Record<UiIconName, string> = {
   restore: copyIcon,
   folder: folderIcon,
   browser: browserIcon,
+  terminal: terminalIcon,
   reload: workingIcon,
   arrow: arrowIcon,
   chevron: chevronIcon,

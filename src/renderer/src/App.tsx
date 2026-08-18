@@ -5,6 +5,7 @@ import type {
   BrowserCanvasState,
   BrowserSnapshot,
   CameraState,
+  GithubPluginSearchResult,
   HomeGridSize,
   HomeWidgetPlacement,
   InstalledPlugin,
@@ -14,6 +15,8 @@ import type {
   PluginContribution,
   PluginGridSize,
   PluginInstallPreview,
+  PluginManifest,
+  PluginUpdateStatus,
   ProviderId,
   SessionBounds,
   SessionMetadata,
@@ -265,6 +268,7 @@ export function App(): React.JSX.Element {
     if (provider === "terminal") void openTerminal();
     else setLaunchProvider(provider);
   }), [openTerminal]);
+
 
   const launchAgent = useCallback(async (
     provider: AgentProviderId,
@@ -552,6 +556,32 @@ export function App(): React.JSX.Element {
     showToast(t(settings.locale, "pluginRemoved"));
   }, [saveSettings, settings.homeLayout, settings.locale, settings.pluginCanvas, showToast]);
 
+  const searchPlugins = useCallback((query: string): Promise<GithubPluginSearchResult[]> => (
+    window.canvasTTY.plugins.search(query)
+  ), []);
+
+  const showcasePlugins = useCallback((): Promise<GithubPluginSearchResult[]> => (
+    window.canvasTTY.plugins.showcase()
+  ), []);
+
+  const fetchPluginIcons = useCallback((sourceUrls: string[]): Promise<Record<string, string | null>> => (
+    window.canvasTTY.plugins.icon(sourceUrls)
+  ), []);
+
+  const previewManifests = useCallback((sourceUrls: string[]): Promise<Record<string, PluginManifest>> => (
+    window.canvasTTY.plugins.manifests(sourceUrls)
+  ), []);
+
+  const checkPluginUpdates = useCallback((): Promise<PluginUpdateStatus[]> => (
+    window.canvasTTY.plugins.checkUpdates()
+  ), []);
+
+  const updatePlugin = useCallback(async (pluginId: string): Promise<void> => {
+    const updated = await window.canvasTTY.plugins.update(pluginId);
+    setPlugins((current) => current.map((plugin) => plugin.manifest.id === pluginId ? updated : plugin));
+    showToast(`${t(settings.locale, "pluginUpdated")}: ${updated.manifest.name}`);
+  }, [settings.locale, showToast]);
+
   const openPluginCanvasContribution = useCallback(async (
     plugin: InstalledPlugin,
     contribution: Extract<PluginContribution, { kind: "canvas-app" }>,
@@ -752,12 +782,19 @@ export function App(): React.JSX.Element {
         onChange={saveSettings}
         onPreviewPlugin={previewPlugin}
         onInstallPlugin={installPlugin}
+        onSearchPlugins={searchPlugins}
+        onShowcasePlugins={showcasePlugins}
+        onFetchPluginIcons={fetchPluginIcons}
+        onPreviewManifests={previewManifests}
+        onCheckPluginUpdates={checkPluginUpdates}
+        onUpdatePlugin={updatePlugin}
         onSetPluginModules={setPluginModules}
         onSetPluginEnabled={setPluginEnabled}
         onUninstallPlugin={uninstallPlugin}
         onOpenPluginContribution={openPluginContribution}
         onToggleHomeWidget={toggleHomeWidget}
         onEditHome={startHomeEditor}
+        onOpenBrowser={openBrowser}
       />
       <Toast message={toast} />
     </div>

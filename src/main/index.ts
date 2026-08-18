@@ -7,6 +7,7 @@ import { TerminalManager } from "./services/TerminalManager";
 import { LimitsService } from "./services/LimitsService";
 import { augmentCliPath } from "./services/cliEnvironment";
 import { PluginManager } from "./services/PluginManager";
+import { GithubAuthService } from "./services/GithubAuthService";
 import { PluginMediaService } from "./services/PluginMediaService";
 import { PluginSecretsService } from "./services/PluginSecretsService";
 import { BrowserService } from "./services/BrowserService";
@@ -59,6 +60,7 @@ let mainWindow: BrowserWindow | null = null;
 let terminalManager: TerminalManager | null = null;
 let limitsService: LimitsService | null = null;
 let pluginManager: PluginManager | null = null;
+let githubAuth: GithubAuthService | null = null;
 let pluginMediaService: PluginMediaService | null = null;
 let pluginSecretsService: PluginSecretsService | null = null;
 let browserService: BrowserService | null = null;
@@ -189,6 +191,9 @@ async function initializeServices(): Promise<void> {
   limitsService = new LimitsService(app.getVersion());
   pluginManager = new PluginManager(app.getPath("userData"));
   await pluginManager.load();
+  githubAuth = new GithubAuthService(app.getPath("userData"));
+  await githubAuth.load();
+  pluginManager.registerTokenProvider(() => githubAuth!.getToken());
   pluginMediaService = new PluginMediaService(
     app.getPath("userData"),
     (pluginId, permission) => pluginManager!.assertPermission(pluginId, permission)
@@ -214,6 +219,7 @@ async function initializeServices(): Promise<void> {
     pluginMedia: pluginMediaService,
     pluginSecrets: pluginSecretsService,
     browser: browserService,
+    githubAuth: githubAuth!,
     getMainWindow: () => mainWindow,
     applyBrowserSettings: (next) => {
       agentBrowserBridge?.setEnabled(next.browserAgentAccess);
