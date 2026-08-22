@@ -21,7 +21,7 @@
 
 | Desktop | Interface | Terminal | Providers |
 |:--|:--|:--|:--|
-| **Electron**<br>electron-vite | **React**<br>TypeScript | **xterm.js**<br>node-pty | **Codex**<br>Claude · Kimi |
+| **Electron**<br>electron-vite | **React**<br>TypeScript | **xterm.js**<br>node-pty | **Codex**<br>Claude · Kimi · OpenCode · Hermes · Grok Build |
 
 The application interface currently supports English and Russian. This documentation is also available in Simplified Chinese.
 
@@ -31,7 +31,7 @@ Launch a shell or agent in a project directory, move and resize its live termina
 
 ## Windows shells and provider CLIs
 
-On Windows, the Terminal launcher uses the built-in Windows PowerShell with a clean `-NoLogo -NoProfile` session, then falls back to `pwsh` or `cmd.exe`. Codex, Claude, and Kimi are resolved to a concrete `.exe`, `.com`, `.cmd`, or `.bat` launcher from the user's `PATH` or standard per-user CLI directories before they are passed to `node-pty`/ConPTY.
+On Windows, the Terminal launcher uses the built-in Windows PowerShell with a clean `-NoLogo -NoProfile` session, then falls back to `pwsh` or `cmd.exe`. Codex, Claude, Kimi, OpenCode, Hermes, and Grok Build are resolved to a concrete `.exe`, `.com`, `.cmd`, or `.bat` launcher from the user's `PATH` or standard per-user CLI directories before they are passed to `node-pty`/ConPTY.
 
 CanvasTTY does not install provider CLIs. If a provider is missing, the launch dialog reports which CLI was not found and which directories were checked. Install the required CLI and restart CanvasTTY so the desktop process receives the updated environment.
 
@@ -68,7 +68,7 @@ Community plugins:
 
 ## Built-in agent browser
 
-CanvasTTY includes a core browser rather than a plugin capability: trusted React chrome backed by sandboxed Electron `WebContentsView` tabs in one persistent Chromium profile. It is available from HOME, restores safe HTTP(S) tabs, keeps website credentials inside Chromium, manages downloads/uploads, and exposes typed browser actions to Claude Code, Codex, and Kimi sessions launched by CanvasTTY.
+CanvasTTY includes a core browser rather than a plugin capability: trusted React chrome backed by sandboxed Electron `WebContentsView` tabs in one persistent Chromium profile. It is available from HOME, restores safe HTTP(S) tabs, keeps website credentials inside Chromium, manages downloads/uploads, and exposes typed browser actions to Claude Code, Codex, Kimi, OpenCode, and Hermes sessions launched by CanvasTTY.
 
 The browser card participates in the same canvas selection, hover-focus, drag, resize, and semantic-zoom model as terminals. Settings controls agent access, tab restore, recent downloads/activity, and browser-data clearing. Agent access uses an authenticated local socket or named pipe and a bundled stdio MCP helper; it does not open a TCP or remote-debugging port and never exports cookies, passwords, auth headers, local storage, arbitrary JavaScript, or raw CDP.
 

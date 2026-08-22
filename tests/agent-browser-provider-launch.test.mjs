@@ -6,6 +6,7 @@ import { constants } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { parse as parseYaml } from "yaml";
 
 import {
   APPROVED_BROWSER_TOOL_NAMES,
@@ -19,6 +20,12 @@ import {
   recoverKimiConfigurationOnStartup,
   resolveKimiHomeDirectory
 } from "../src/main/services/agent-browser/ProviderLaunch.ts";
+import {
+  HermesTemporaryConfiguration,
+  hermesMcpEntry,
+  recoverHermesConfigurationOnStartup,
+  resolveHermesHomeDirectory
+} from "../src/main/services/hermesConfig.ts";
 
 const helper = Object.freeze({
   command: "/opt/CanvasTTY Agent/helper.mjs",
@@ -111,6 +118,14 @@ function kimiPaths(home) {
   };
 }
 
+function hermesPaths(home) {
+  return {
+    config: join(home, "config.yaml"),
+    journal: join(home, ".canvastty-hermes-browser-recovery.json"),
+    backupRoot: join(home, ".canvastty-hermes-browser-backups")
+  };
+}
+
 test("claudeMcpArgs returns one exact per-launch MCP config and permission rule", () => {
   assert.deepEqual(claudeMcpArgs(helper), [
     "--mcp-config",
@@ -127,6 +142,206 @@ test("codexMcpArgs returns one complete table that replaces a same-name global s
     `${prefix}={command=${JSON.stringify(helper.command)},args=[${helper.args.map(JSON.stringify).join(",")}],env={\"ELECTRON_RUN_AS_NODE\"=\"1\"},env_vars=[\"CANVASTTY_AGENT_BROWSER_ADDRESS\",\"CANVASTTY_AGENT_ID\",\"CANVASTTY_AGENT_CONNECTION_ID\",\"CANVASTTY_TERMINAL_SESSION_ID\",\"CANVASTTY_AGENT_PROVIDER\",\"CANVASTTY_AGENT_CAPABILITY\"],enabled=true,required=true,default_tools_approval_mode=\"approve\",enabled_tools=[${APPROVED_BROWSER_TOOL_NAMES.map(JSON.stringify).join(",")}],disabled_tools=[]}`
   ];
   assert.deepEqual(codexMcpArgs(helper), expected);
+});
+
+test("OpenCode receives one per-launch MCP override without losing existing inline config", () => {
+  const adapters = new ProviderLaunchAdapters({
+    helper,
+    runtimeDirectory: "/tmp/canvastty-unused-runtime",
+    environment: {
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({
+        model: "opencode/kimi-k3",
+        mcp: { existing: { type: "remote", url: "https://example.test/mcp" } },
+        permission: "ask"
+      })
+    }
+  });
+
+  const launch = adapters.prepare("opencode", "connection-opencode");
+  assert.deepEqual(launch.args, []);
+  const config = JSON.parse(launch.environment.OPENCODE_CONFIG_CONTENT);
+  assert.equal(config.model, "opencode/kimi-k3");
+  assert.deepEqual(config.mcp.existing, { type: "remote", url: "https://example.test/mcp" });
+  assert.deepEqual(config.mcp[MCP_SERVER_NAME], {
+    type: "local",
+    command: [helper.command, ...helper.args],
+    enabled: true,
+    environment: helper.env
+  });
+  assert.deepEqual(config.permission, {
+    "*": "ask",
+    [`${MCP_SERVER_NAME}_*`]: "allow"
+  });
+  launch.releaseConfiguration();
+});
+
+test("OpenCode browser launch rejects malformed inline config instead of replacing it", () => {
+  const adapters = new ProviderLaunchAdapters({
+    helper,
+    runtimeDirectory: "/tmp/canvastty-unused-runtime",
+    environment: { OPENCODE_CONFIG_CONTENT: "not-json" }
+  });
+  assert.throws(() => adapters.prepare("opencode", "connection-opencode"), /must contain valid JSON/u);
+});
+
+test("Hermes MCP entry passes capabilities through placeholders and exposes only browser tools", () => {
+  const entry = hermesMcpEntry(helper);
+  assert.equal(entry.command, helper.command);
+  assert.deepEqual(entry.args, helper.args);
+  assert.equal(entry.env.ELECTRON_RUN_AS_NODE, "1");
+  assert.equal(entry.env.CANVASTTY_AGENT_CAPABILITY, "${CANVASTTY_AGENT_CAPABILITY}");
+  assert.equal(entry.env.CANVASTTY_AGENT_PROVIDER, "${CANVASTTY_AGENT_PROVIDER}");
+  assert.equal(JSON.stringify(entry).includes("one-time-secret"), false);
+  assert.deepEqual(entry.tools, {
+    include: [...APPROVED_BROWSER_TOOL_NAMES],
+    resources: false,
+    prompts: false
+  });
+  assert.equal(entry.trust, "full");
+});
+
+test("HermesTemporaryConfiguration restores config.yaml byte for byte", async (t) => {
+  const home = await fixture(t, "canvastty-hermes-exact-");
+  const paths = hermesPaths(home);
+  const original = Buffer.from("# preserve this comment\nmodel:\n  default: test/model\nmcp_servers:\n  existing:\n    url: https://example.test/mcp\n", "utf8");
+  await writeFile(paths.config, original, { mode: 0o640 });
+  const originalMode = (await stat(paths.config)).mode & 0o777;
+
+  const temporary = HermesTemporaryConfiguration.begin({ homeDirectory: home, helper });
+  const during = parseYaml(await readFile(paths.config, "utf8"));
+  assert.equal(during.model.default, "test/model");
+  assert.equal(during.mcp_servers.existing.url, "https://example.test/mcp");
+  assert.deepEqual(during.mcp_servers[MCP_SERVER_NAME], hermesMcpEntry(helper));
+  assert.equal((await stat(paths.config)).mode & 0o777, originalMode);
+
+  temporary.cleanup();
+  assert.deepEqual(await readFile(paths.config), original);
+  assert.equal((await stat(paths.config)).mode & 0o777, originalMode);
+  assert.equal(await exists(paths.journal), false);
+  assert.equal(await exists(paths.backupRoot), false);
+});
+
+test("HermesTemporaryConfiguration removes config created only for the launch", async (t) => {
+  const home = await fixture(t, "canvastty-hermes-absent-");
+  const paths = hermesPaths(home);
+  const temporary = HermesTemporaryConfiguration.begin({ homeDirectory: home, helper });
+
+  assert.deepEqual(
+    parseYaml(await readFile(paths.config, "utf8")).mcp_servers[MCP_SERVER_NAME],
+    hermesMcpEntry(helper)
+  );
+  temporary.cleanup();
+
+  assert.equal(await exists(paths.config), false);
+  assert.equal(await exists(paths.journal), false);
+  assert.equal(await exists(paths.backupRoot), false);
+  assert.deepEqual(await readdir(home), []);
+});
+
+test("startup Hermes recovery restores an interrupted launch byte for byte", async (t) => {
+  const home = await fixture(t, "canvastty-hermes-recovery-");
+  const paths = hermesPaths(home);
+  const original = Buffer.from("# exact config\nmodel:\n  default: test/model\n", "utf8");
+  await writeFile(paths.config, original, { mode: 0o640 });
+
+  HermesTemporaryConfiguration.begin({ homeDirectory: home, helper });
+  assert.equal(await exists(paths.journal), true);
+  assert.notDeepEqual(await readFile(paths.config), original);
+
+  recoverHermesConfigurationOnStartup(home);
+  assert.deepEqual(await readFile(paths.config), original);
+  assert.equal(await exists(paths.journal), false);
+  assert.equal(await exists(paths.backupRoot), false);
+});
+
+test("Hermes cleanup preserves a concurrent user edit while removing only its own MCP entry", async (t) => {
+  const home = await fixture(t, "canvastty-hermes-concurrent-");
+  const paths = hermesPaths(home);
+  await writeFile(paths.config, "model: test/model\n", { mode: 0o600 });
+  const temporary = HermesTemporaryConfiguration.begin({ homeDirectory: home, helper });
+  const during = await readFile(paths.config, "utf8");
+  await writeFile(paths.config, `${during}display:\n  compact: true\n`, { mode: 0o600 });
+
+  temporary.cleanup();
+  const restored = parseYaml(await readFile(paths.config, "utf8"));
+  assert.equal(restored.model, "test/model");
+  assert.equal(restored.display.compact, true);
+  assert.equal("mcp_servers" in restored, false);
+});
+
+test("Hermes cleanup fails closed when its MCP entry changes ownership", async (t) => {
+  const home = await fixture(t, "canvastty-hermes-ownership-");
+  const paths = hermesPaths(home);
+  await writeFile(paths.config, "model: test/model\n", { mode: 0o600 });
+  const temporary = HermesTemporaryConfiguration.begin({ homeDirectory: home, helper });
+  const changed = parseYaml(await readFile(paths.config, "utf8"));
+  changed.mcp_servers[MCP_SERVER_NAME].command = "/other/owner";
+  await writeFile(paths.config, `${JSON.stringify(changed)}\n`, { mode: 0o600 });
+
+  assert.throws(
+    () => temporary.cleanup(),
+    /ownership changed before cleanup/u
+  );
+  assert.equal(await exists(paths.journal), true);
+  assert.equal(await exists(paths.backupRoot), true);
+  assert.equal(parseYaml(await readFile(paths.config, "utf8")).mcp_servers[MCP_SERVER_NAME].command, "/other/owner");
+});
+
+test("Hermes configuration rejects invalid YAML without replacing it", async (t) => {
+  const home = await fixture(t, "canvastty-hermes-yaml-");
+  const paths = hermesPaths(home);
+  const original = "model: [unterminated\n";
+  await writeFile(paths.config, original, { mode: 0o600 });
+
+  assert.throws(
+    () => HermesTemporaryConfiguration.begin({ homeDirectory: home, helper }),
+    /YAML configuration is invalid/u
+  );
+  assert.equal(await readFile(paths.config, "utf8"), original);
+  assert.equal(await exists(paths.journal), false);
+  assert.equal(await exists(paths.backupRoot), false);
+});
+
+test("Hermes configuration refuses to replace an existing CanvasTTY server", async (t) => {
+  const home = await fixture(t, "canvastty-hermes-conflict-");
+  const paths = hermesPaths(home);
+  const original = `mcp_servers:\n  ${MCP_SERVER_NAME}:\n    command: keep\n`;
+  await writeFile(paths.config, original, { mode: 0o600 });
+  assert.throws(
+    () => HermesTemporaryConfiguration.begin({ homeDirectory: home, helper }),
+    /already configured/u
+  );
+  assert.equal(await readFile(paths.config, "utf8"), original);
+});
+
+test("Hermes launch configuration is shared until the final session exits", async (t) => {
+  const home = await fixture(t, "canvastty-hermes-shared-");
+  const paths = hermesPaths(home);
+  const original = "model: test/model\n";
+  await writeFile(paths.config, original, { mode: 0o600 });
+  const adapters = new ProviderLaunchAdapters({
+    helper,
+    hermesHomeDirectory: home,
+    runtimeDirectory: join(home, "runtime")
+  });
+
+  const first = adapters.prepare("hermes", "hermes-1");
+  const second = adapters.prepare("hermes", "hermes-2");
+  first.releaseConfiguration();
+  assert.ok(parseYaml(await readFile(paths.config, "utf8")).mcp_servers[MCP_SERVER_NAME]);
+  second.releaseConfiguration();
+  assert.equal(await readFile(paths.config, "utf8"), original);
+});
+
+test("HERMES_HOME selects the exact writable configuration directory", async (t) => {
+  const root = await fixture(t, "canvastty-hermes-home-");
+  const nested = join(root, "custom", "hermes");
+  assert.equal(resolveHermesHomeDirectory({ HERMES_HOME: nested }), nested);
+  assert.throws(
+    () => resolveHermesHomeDirectory({ HERMES_HOME: "relative/hermes" }),
+    /must be an absolute path/u
+  );
+  recoverHermesConfigurationOnStartup(nested);
 });
 
 test("KIMI_CODE_HOME selects the exact writable configuration directory", async (t) => {
@@ -166,7 +381,12 @@ test("helper environment is validated before argv or filesystem artifacts are cr
       helper: invalidHelper,
       includeMcpEntry: true
     }), entry.message);
+    assert.throws(() => HermesTemporaryConfiguration.begin({
+      homeDirectory: join(root, `hermes-${index}`),
+      helper: invalidHelper
+    }), entry.message);
     assert.equal(await exists(home), false);
+    assert.equal(await exists(join(root, `hermes-${index}`)), false);
     assert.equal(await exists(runtimeDirectory), false);
   }
 });

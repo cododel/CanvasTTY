@@ -206,18 +206,22 @@ export class TerminalManager {
     profile: CreateSessionRequest["profile"],
     cwd: string
   ): { process: IPty; agentBrowser: PreparedAgentBrowserPtyLaunch | null } {
-    const agentBrowser = provider === "terminal"
+    const agentBrowser = provider === "terminal" || provider === "grok"
       ? null
       : this.agentBrowser?.prepareLaunch({ terminalSessionId: id, provider, cwd }) ?? null;
     try {
-      const launch = resolveTerminalLaunch(provider, profile, agentBrowser?.args ?? []);
+      const baseEnvironment = terminalEnvironment();
+      const browserEnvironment = agentBrowser?.environment ?? {};
+      const launch = resolveTerminalLaunch(provider, profile, agentBrowser?.args ?? [], {
+        environment: { ...baseEnvironment, ...browserEnvironment }
+      });
       return {
         process: pty.spawn(launch.command, launch.args, {
           name: "xterm-256color",
           cols: 100,
           rows: 30,
           cwd,
-          env: { ...terminalEnvironment(), ...agentBrowser?.environment }
+          env: { ...baseEnvironment, ...browserEnvironment, ...launch.environment }
         }),
         agentBrowser
       };
@@ -284,6 +288,8 @@ export function terminalEnvironment(
 function defaultTitle(provider: ProviderId, cwd: string): string {
   const project = basename(cwd) || cwd;
   if (provider === "terminal") return `Terminal · ${project}`;
+  if (provider === "opencode") return `${project} · OpenCode`;
+  if (provider === "hermes") return `${project} · Hermes`;
   return `${project} · ${provider[0].toUpperCase()}${provider.slice(1)}`;
 }
 
@@ -296,7 +302,7 @@ function assertDirectory(cwd: string): void {
 }
 
 function assertCreateRequest(request: CreateSessionRequest): void {
-  const providers = new Set<ProviderId>(["terminal", "codex", "claude", "kimi"]);
+  const providers = new Set<ProviderId>(["terminal", "codex", "claude", "kimi", "opencode", "hermes", "grok"]);
   if (!request || !providers.has(request.provider)) throw new Error("Unknown terminal provider.");
   if (request.profile !== "normal" && request.profile !== "yolo") throw new Error("Unknown launch profile.");
   if (typeof request.cwd !== "string" || request.cwd.length === 0) throw new Error("Project folder is required.");

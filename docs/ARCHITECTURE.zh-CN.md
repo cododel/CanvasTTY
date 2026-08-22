@@ -30,12 +30,13 @@ Electron main process
 - `src/preload/index.ts` 只暴露 renderer 需要的类型化能力。Node integration 保持关闭，context isolation 与 sandbox 保持开启。
 - `src/main/ipc/registerIpc.ts` 负责原生 side effect，并校验对持久化媒体的访问。
 - `src/main/services/TerminalManager.ts` 是实时会话状态与 PTY buffer 的事实来源。它用有界分块缓冲区保存 scrollback，并将 PTY data 合并为 16ms IPC batch，使 clear/redraw sequence 尽量一起到达 xterm。新 PTY 状态为 `idle`；进程退出只产生 `done` 或 `failed`。`working` 和 `needs_approval` 只接受类型化的服务商 lifecycle signal，绝不根据 PTY 是否存在或终端文字推断。
-- `src/main/services/LimitsService.ts` 通过已安装 CLI 的 app-server protocol 读取 Codex，通过服务商 usage endpoint 读取 Claude/Kimi。凭据只在可信主进程读取，只通过 HTTPS 发往匹配的服务商，不记录也不通过 IPC 暴露。该服务负责 timeout、structural normalization、cache、stale fallback 与子进程 cleanup；原始服务商响应不会跨越 IPC。
+- `src/main/services/LimitsService.ts` 通过已安装 CLI 的 app-server protocol 读取 Codex，并通过服务商 usage/billing endpoint 读取 Claude、Kimi、OpenCode Go 与 Grok Build。凭据只在可信主进程读取，只通过 HTTPS 发往匹配的服务商，不记录也不通过 IPC 暴露。该服务负责 timeout、structural normalization、cache、stale fallback 与子进程 cleanup；原始服务商响应不会跨越 IPC。
 - `src/main/services/SettingsStore.ts` 会规范化每次更新，并通过串行原子写入持久化。
 - `src/main/services/PluginManager.ts` 安装已构建的静态仓库，不执行 package script；拒绝 symlink 与超大包；持久化启用 registry；只提供包内文件，并执行每插件 permissions/storage quota。
 - `src/main/services/PluginSecretsService.ts` 串行化每个插件的机密写入，通过 Electron `safeStorage` 加密完整的有界 payload，拒绝 plaintext-only backend，并在卸载时删除加密文件。
 - `src/main/services/PluginMediaService.ts` 仅在原生目录选择后保存授权，隐藏绝对路径，跳过 symlink，并以 HTTP Range 提供音频。Playlist 读取限制在授权媒体库内；写入受大小限制，并且只能原子写入 `Playlists/`。
 - `src/main/services/BrowserService.ts` 管理内置浏览器的 `WebContentsView` tab。远程页面使用独立 persistent partition，禁用 Node，启用 context isolation/sandbox，并默认拒绝网站权限。这是 core service，不是 runtime 插件能力。
+- `TerminalManager` 注入 MCP helper 时不会留下永久的服务商配置变更。Claude Code 与 Codex 使用 CLI 参数；OpenCode 使用合并后的、仅本次启动有效的 `OPENCODE_CONFIG_CONTENT` 和一条 scoped browser-tool 权限；Kimi 使用 per-run MCP 配置，旧版本则使用带 compare-and-swap 与 recovery journal 的临时配置。Hermes 会在 `HERMES_HOME/config.yaml` 中获得临时 `mcp_servers.canvastty_browser` 配置项（POSIX 默认路径为 `~/.hermes/config.yaml`，Windows 默认路径为 `%LOCALAPPDATA%\hermes\config.yaml`），敏感 capability 值仍以子进程环境变量占位符保存。Kimi 与 Hermes 的临时配置会保留到最后一个所属 PTY 会话结束；若文件未被并发修改，则精确恢复原始字节。若 Hermes 启动意外中断，journal 会在 CanvasTTY 下次启动时修复配置，compare-and-swap 则保留用户的并发修改。其他 MCP 配置项、凭据和文件/shell 权限不会受影响。OpenCode YOLO 仅使用本次启动的 inline override，Hermes 则使用原生 `--yolo` 参数；两者都不修改持久权限设置。
 - `src/main/services/cliEnvironment.ts` 会在启动任何服务商进程前，用现有用户 CLI 目录补充图形会话的 `PATH`，且不会读取 shell startup script。
 
 主 `BrowserWindow` 在 settings、plugins、media 和 IPC 服务初始化之前创建并显示轻量本地启动页。初始化成功后替换为可信 renderer；bootstrap 失败后替换为可见错误页，并保留原生对话框 fallback。主进程持有 Electron single-instance lock；再次启动时恢复并聚焦已有窗口。
@@ -90,7 +91,7 @@ Session counter、progress bar 与 status 必须来自真实 `SessionSnapshot`�
 
 1. `App` 在 bootstrap 时以及每 60 秒请求脱敏后的 `LimitsSnapshot`。
 2. `LimitsService` 对 refresh 去重，并维护 60 秒 cache。
-3. Codex 通过 `codex app-server` 的 `account/rateLimits/read` 查询；Claude/Kimi 使用只读 usage endpoint 和对应 CLI 已有凭据。响应经过结构校验，只保留 percentage、window 与 reset time。
+3. Codex 通过 `codex app-server` 的 `account/rateLimits/read` 查询；Claude、Kimi、OpenCode Go 与 Grok Build 使用只读 usage/billing endpoint 和对应 CLI 已有凭据。OpenCode Go 提供真实 rolling、weekly、monthly window；Grok Build 提供真实共享 billing period。响应经过结构校验，只保留 percentage、window 与 reset time。
 4. 一次成功后刷新失败时，最后的有效 snapshot 以 stale 返回。缺失或不支持的 adapter 返回明确 unavailable reason，而不是 `0%`。
 5. Claude weekly window 只适用于 Claude.ai subscription session。API Usage Billing 返回 `subscription-required`，而不是虚假 quota。CanvasTTY 不解析服务商 TUI screen。
 

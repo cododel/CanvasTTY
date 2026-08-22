@@ -30,6 +30,23 @@
   mask-size: 96px 48px;
 }
 
+.workspace.pattern-diagonal::before {
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0,
+    transparent 23px,
+    var(--dot) 23px,
+    var(--dot) 24px,
+    transparent 24px,
+    transparent 48px
+  );
+}
+
+.workspace.pattern-rings::before {
+  background-image: radial-gradient(circle, transparent 7px, var(--dot) 7.5px, transparent 8.5px);
+  background-size: 40px 40px;
+}
+
 .workspace.pattern-none::before {
   background: none;
   -webkit-mask-image: none;

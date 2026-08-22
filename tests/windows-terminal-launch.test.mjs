@@ -42,6 +42,88 @@ test("Unix terminal keeps the configured login shell", () => {
   );
 });
 
+test("OpenCode uses its native TUI and applies YOLO through per-run inline config", () => {
+  assert.deepEqual(
+    resolveTerminalLaunch("opencode", "normal", [], {
+      platform: "linux",
+      environment: {}
+    }),
+    { command: "opencode", args: [] }
+  );
+
+  const launch = resolveTerminalLaunch("opencode", "yolo", [], {
+    platform: "linux",
+    environment: {
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: "opencode/kimi-k3", theme: "system" })
+    }
+  });
+  assert.equal(launch.command, "opencode");
+  assert.deepEqual(launch.args, []);
+  assert.deepEqual(JSON.parse(launch.environment.OPENCODE_CONFIG_CONTENT), {
+    model: "opencode/kimi-k3",
+    theme: "system",
+    permission: "allow"
+  });
+});
+
+test("OpenCode YOLO preserves a browser MCP inline override", () => {
+  const existing = {
+    mcp: {
+      canvastty_browser: {
+        type: "local",
+        command: ["helper", "--stdio"],
+        enabled: true
+      }
+    },
+    permission: { canvastty_browser: "allow" }
+  };
+  const launch = resolveTerminalLaunch("opencode", "yolo", [], {
+    platform: "linux",
+    environment: { OPENCODE_CONFIG_CONTENT: JSON.stringify(existing) }
+  });
+  const config = JSON.parse(launch.environment.OPENCODE_CONFIG_CONTENT);
+  assert.deepEqual(config.mcp, existing.mcp);
+  assert.equal(config.permission, "allow");
+});
+
+test("OpenCode refuses to replace malformed inline config", () => {
+  assert.throws(
+    () => resolveTerminalLaunch("opencode", "yolo", [], {
+      platform: "linux",
+      environment: { OPENCODE_CONFIG_CONTENT: "not-json" }
+    }),
+    /must contain valid JSON/u
+  );
+});
+
+test("Hermes uses its native interactive CLI and scopes YOLO to the launch", () => {
+  assert.deepEqual(
+    resolveTerminalLaunch("hermes", "normal", [], {
+      platform: "linux",
+      environment: {}
+    }),
+    { command: "hermes", args: [] }
+  );
+  assert.deepEqual(
+    resolveTerminalLaunch("hermes", "yolo", [], {
+      platform: "linux",
+      environment: {}
+    }),
+    { command: "hermes", args: ["--yolo"] }
+  );
+});
+
+test("Grok Build uses its native TUI and scopes automatic approval to YOLO", () => {
+  assert.deepEqual(
+    resolveTerminalLaunch("grok", "normal", [], { platform: "linux", environment: {} }),
+    { command: "grok", args: [] }
+  );
+  assert.deepEqual(
+    resolveTerminalLaunch("grok", "yolo", [], { platform: "linux", environment: {} }),
+    { command: "grok", args: ["--always-approve"] }
+  );
+});
+
 test("Windows Codex resolves an absolute native executable and preserves bridge arguments", () => {
   const codex = "C:\\Users\\dev\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe";
   const launch = resolveTerminalLaunch("codex", "yolo", ["--bridge", "C:\\runtime path\\helper"], {
@@ -71,6 +153,40 @@ test("Windows provider lookup supports a native executable from PATH", () => {
   });
 
   assert.deepEqual(launch, { command: kimi, args: [] });
+});
+
+test("Windows provider lookup resolves an OpenCode npm shim", () => {
+  const opencode = "C:\\Users\\dev\\AppData\\Roaming\\npm\\opencode.cmd";
+  const commandPrompt = "C:\\Windows\\System32\\cmd.exe";
+  const launch = resolveTerminalLaunch("opencode", "normal", [], {
+    platform: "win32",
+    homeDirectory: "C:\\Users\\dev",
+    environment: {
+      APPDATA: "C:\\Users\\dev\\AppData\\Roaming",
+      ComSpec: commandPrompt
+    },
+    fileExists: existing(opencode, commandPrompt)
+  });
+
+  assert.deepEqual(launch, {
+    command: commandPrompt,
+    args: '/d /s /c "C:\\Users\\dev\\AppData\\Roaming\\npm\\opencode.cmd"'
+  });
+});
+
+test("Windows provider lookup resolves a native Hermes launcher", () => {
+  const hermes = "C:\\Users\\dev\\.local\\bin\\hermes.exe";
+  const launch = resolveTerminalLaunch("hermes", "yolo", ["--bridge"], {
+    platform: "win32",
+    homeDirectory: "C:\\Users\\dev",
+    environment: {},
+    fileExists: existing(hermes)
+  });
+
+  assert.deepEqual(launch, {
+    command: hermes,
+    args: ["--yolo", "--bridge"]
+  });
 });
 
 test("Windows provider lookup respects PATH before known fallback directories", () => {

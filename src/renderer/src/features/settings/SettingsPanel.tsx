@@ -5,14 +5,17 @@ import type {
   BrowserCommandType,
   BrowserDownloadSnapshot,
   BrowserSnapshot,
+  CanvasColorId,
   CanvasPatternId,
   CanvasWheelCaptureMode,
   EdgePanSpeed,
   FocusActivation,
   GithubPluginSearchResult,
+  HomeAccentColors,
+  HomeAccentPresetId,
   InstalledPlugin,
+  LimitProviderId,
   LocaleId,
-  PaletteId,
   PluginContribution,
   PluginGridSize,
   PluginManifest,
@@ -26,14 +29,41 @@ import {
   canvasOverrideBindingConflicts,
   defaultCanvasWheelBinding
 } from "../../../../shared/canvasNavigation";
+import { ProviderIcon } from "../../components/ProviderIcon";
 import { UiIcon } from "../../components/UiIcon";
+import {
+  AGENT_PROVIDERS,
+  LIMIT_PROVIDERS,
+  PROVIDERS,
+  resolveHomeLimitProviders,
+  resolveHomeLauncherProviders,
+  setHomeLimitProviderEnabled,
+  setHomeLauncherProviderEnabled
+} from "../../lib/providers";
 import { shortcutFromKeyboardEvent } from "../../lib/shortcuts";
 import { t } from "../../lib/i18n";
 import { PluginSettingsSection } from "../plugins/PluginSettingsSection";
 import { HomeAppearanceSettings } from "../home/HomeAppearanceSettings";
+import {
+  canvasColorPatch,
+  homeAccentPresetPatch,
+  resolveAppearanceSettings
+} from "./appearanceSettings";
 import { CanvasNavigationShortcutEditor } from "./CanvasNavigationShortcutEditor";
 
-type SettingsSection = "general" | "appearance" | "controls" | "browser" | "plugins";
+type SettingsSection = "general" | "appearance" | "agents" | "controls" | "browser" | "plugins";
+
+const CLASSIC_HOME_PREVIEW = ["#B8CF99", "#D8E1C5", "#9CC7DC", "#D5A2C9"];
+
+const CANVAS_COLOR_PREVIEWS: Record<CanvasColorId, string> = {
+  sage: "#AAA7A2",
+  lilac: "#B8ADB9",
+  night: "#222632",
+  sand: "#B9AD96",
+  mist: "#A9B9BD",
+  rose: "#B9A6AD",
+  slate: "#262B36"
+};
 
 interface SettingsPanelProps {
   open: boolean;
@@ -83,6 +113,9 @@ export function SettingsPanel({
   onOpenBrowser,
 }: SettingsPanelProps): React.JSX.Element {
   const locale = settings.locale;
+  const appearance = resolveAppearanceSettings(settings);
+  const homeLauncherProviders = resolveHomeLauncherProviders(settings);
+  const homeLimitProviders = resolveHomeLimitProviders(settings);
   const [section, setSection] = useState<SettingsSection>("general");
   const [capturing, setCapturing] = useState<ShortcutAction | null>(null);
   const [shortcutError, setShortcutError] = useState<string | null>(null);
@@ -202,23 +235,25 @@ export function SettingsPanel({
       if (event.target === event.currentTarget) onClose();
     }}>
       <aside className={`settings-panel ${open ? "settings-panel--open" : ""}`} aria-hidden={!open}>
-        <header className="dialog-header settings-panel__header">
-          <h2>{t(locale, "settings")}</h2>
-          <button className="icon-button" type="button" onClick={onClose} aria-label={t(locale, "close")}><UiIcon name="close" size={20} /></button>
-        </header>
+        <div className="settings-panel__topbar">
+          <header className="dialog-header settings-panel__header">
+            <h2>{t(locale, "settings")}</h2>
+            <button className="icon-button" type="button" onClick={onClose} aria-label={t(locale, "close")}><UiIcon name="close" size={20} /></button>
+          </header>
 
-        <nav className="settings-tabs" role="tablist" aria-label={t(locale, "settingsSections")}>
-          {(["general", "appearance", "controls", "browser", "plugins"] as SettingsSection[]).map((value) => (
-            <button
-              key={value}
-              className={section === value ? "settings-tabs__button settings-tabs__button--active" : "settings-tabs__button"}
-              type="button"
-              role="tab"
-              aria-selected={section === value}
-              onClick={() => setSection(value)}
-            >{t(locale, value)}</button>
-          ))}
-        </nav>
+          <nav className="settings-tabs" role="tablist" aria-label={t(locale, "settingsSections")}>
+            {(["general", "appearance", "agents", "controls", "browser", "plugins"] as SettingsSection[]).map((value) => (
+              <button
+                key={value}
+                className={section === value ? "settings-tabs__button settings-tabs__button--active" : "settings-tabs__button"}
+                type="button"
+                role="tab"
+                aria-selected={section === value}
+                onClick={() => setSection(value)}
+              >{t(locale, value)}</button>
+            ))}
+          </nav>
+        </div>
 
         <div className="settings-panel__content" role="tabpanel">
           {section === "general" && (
@@ -233,17 +268,64 @@ export function SettingsPanel({
 
           {section === "appearance" && (
             <>
-              <SettingGroup label={t(locale, "palette")}>
-                <Segmented
-                  value={settings.palette}
-                  options={(["sage", "lilac", "night"] as PaletteId[]).map((value) => [value, t(locale, value)])}
-                  onChange={(value) => void onChange({ palette: value as PaletteId })}
+              <SettingGroup label={t(locale, "homeColors")} description={t(locale, "homeColorsDescription")}>
+                <SwatchChoices
+                  value={appearance.homeAccentPreset}
+                  options={[
+                    ["classic", t(locale, "homePresetClassic"), CLASSIC_HOME_PREVIEW],
+                    ["warm", t(locale, "homePresetWarm"), ["#D99872", "#F1D4A8", "#A9CAD6", "#D99AA6"]],
+                    ["cool", t(locale, "homePresetCool"), ["#8AB7C5", "#C4DCE2", "#A9B9E3", "#C3A9D9"]],
+                    ["mono", t(locale, "homePresetMono"), ["#89919E", "#D8DCE1", "#AAB2BE", "#C3C7CE"]],
+                    ["custom", t(locale, "homePresetCustom"), Object.values(appearance.homeAccentColors)]
+                  ]}
+                  onChange={(value) => void onChange(homeAccentPresetPatch(value as HomeAccentPresetId))}
+                />
+              </SettingGroup>
+              {appearance.homeAccentPreset === "custom" && (
+                <SettingGroup label={t(locale, "homeCustomColors")}>
+                  <div className="color-editor">
+                    {([
+                      ["clock", t(locale, "homeColorClock")],
+                      ["launcher", t(locale, "homeColorLauncher")],
+                      ["browser", t(locale, "homeColorBrowser")],
+                      ["settings", t(locale, "homeColorSettings")],
+                      ["media", t(locale, "homeColorMedia")]
+                    ] as [keyof HomeAccentColors, string][]).map(([key, label]) => (
+                      <ColorField
+                        key={key}
+                        label={label}
+                        value={appearance.homeAccentColors[key]}
+                        onChange={(value) => void onChange({
+                          homeAccentColors: { ...appearance.homeAccentColors, [key]: value }
+                        })}
+                      />
+                    ))}
+                  </div>
+                </SettingGroup>
+              )}
+              <SettingGroup label={t(locale, "canvasColor")}>
+                <SwatchChoices
+                  value={appearance.canvasColor}
+                  columns={4}
+                  options={([
+                    ["sage", t(locale, "sage")],
+                    ["lilac", t(locale, "lilac")],
+                    ["night", t(locale, "night")],
+                    ["sand", t(locale, "canvasColorSand")],
+                    ["mist", t(locale, "canvasColorMist")],
+                    ["rose", t(locale, "canvasColorRose")],
+                    ["slate", t(locale, "canvasColorSlate")]
+                  ] as [CanvasColorId, string][]).map(([value, label]) => (
+                    [value, label, [CANVAS_COLOR_PREVIEWS[value]]]
+                  ))}
+                  onChange={(value) => void onChange(canvasColorPatch(value as CanvasColorId))}
                 />
               </SettingGroup>
               <SettingGroup label={t(locale, "canvasPattern")}>
                 <Segmented
                   value={settings.pattern}
-                  options={(["dots", "grid", "waves", "none"] as CanvasPatternId[]).map((value) => [value, t(locale, value)])}
+                  options={(["dots", "grid", "waves", "diagonal", "rings", "none"] as CanvasPatternId[]).map((value) => [value, t(locale, value)])}
+                  wrap
                   onChange={(value) => void onChange({ pattern: value as CanvasPatternId })}
                 />
               </SettingGroup>
@@ -260,6 +342,69 @@ export function SettingsPanel({
                 onToggleHomeWidget={onToggleHomeWidget}
                 onEditHome={onEditHome}
               />
+            </>
+          )}
+
+          {section === "agents" && (
+            <>
+              <SettingGroup
+                label={t(locale, "homeLauncherAgents")}
+                description={t(locale, "homeLauncherAgentsDescription")}
+              >
+                <div className="agent-launcher-settings">
+                  {AGENT_PROVIDERS.map((provider) => {
+                    const enabled = homeLauncherProviders.includes(provider);
+                    return (
+                      <div className="agent-launcher-settings__row" key={provider}>
+                        <span className="agent-launcher-settings__identity">
+                          <ProviderIcon provider={provider} size="small" />
+                          <strong>{PROVIDERS[provider].label}</strong>
+                        </span>
+                        <Segmented
+                          value={enabled ? "on" : "off"}
+                          options={[["on", t(locale, "on")], ["off", t(locale, "off")]]}
+                          onChange={(value) => void onChange({
+                            homeLauncherProviders: setHomeLauncherProviderEnabled(
+                              homeLauncherProviders,
+                              provider,
+                              value === "on"
+                            )
+                          })}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </SettingGroup>
+              <SettingGroup
+                label={t(locale, "homeLimitProviders")}
+                description={t(locale, "homeLimitProvidersDescription")}
+              >
+                <div className="agent-launcher-settings">
+                  {LIMIT_PROVIDERS.map((provider: LimitProviderId) => {
+                    const enabled = homeLimitProviders.includes(provider);
+                    return (
+                      <div className="agent-launcher-settings__row" key={provider}>
+                        <span className="agent-launcher-settings__identity">
+                          <ProviderIcon provider={provider} size="small" />
+                          <strong>{PROVIDERS[provider].limitsLabel ?? PROVIDERS[provider].label}</strong>
+                        </span>
+                        <Segmented
+                          value={enabled ? "on" : "off"}
+                          options={[["on", t(locale, "on")], ["off", t(locale, "off")]]}
+                          onChange={(value) => void onChange({
+                            homeLimitProviders: setHomeLimitProviderEnabled(
+                              homeLimitProviders,
+                              provider,
+                              value === "on"
+                            )
+                          })}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </SettingGroup>
             </>
           )}
 
@@ -704,14 +849,16 @@ function SettingGroup({
 function Segmented({
   value,
   options,
+  wrap = false,
   onChange
 }: {
   value: string;
   options: [string, string][];
+  wrap?: boolean;
   onChange(value: string): void;
 }): React.JSX.Element {
   return (
-    <div className="segmented">
+    <div className={`segmented ${wrap ? "segmented--wrap" : ""}`}>
       {options.map(([optionValue, label]) => (
         <button
           className={value === optionValue ? "segmented__button segmented__button--active" : "segmented__button"}
@@ -721,5 +868,96 @@ function Segmented({
         >{label}</button>
       ))}
     </div>
+  );
+}
+
+function SwatchChoices({
+  value,
+  options,
+  columns = 5,
+  onChange
+}: {
+  value: string;
+  options: [string, string, string[]][];
+  columns?: 4 | 5;
+  onChange(value: string): void;
+}): React.JSX.Element {
+  return (
+    <div className={`swatch-choices ${columns === 4 ? "swatch-choices--four" : ""}`}>
+      {options.map(([optionValue, label, colors]) => (
+        <button
+          className={value === optionValue ? "swatch-choice swatch-choice--active" : "swatch-choice"}
+          type="button"
+          key={optionValue}
+          aria-pressed={value === optionValue}
+          onClick={() => onChange(optionValue)}
+        >
+          <span className="swatch-choice__preview" aria-hidden="true">
+            {colors.map((color, index) => (
+              <i key={`${color}-${index}`} style={{ background: color }} />
+            ))}
+          </span>
+          <span>{label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ColorField({
+  label,
+  value,
+  onChange
+}: {
+  label: string;
+  value: string;
+  onChange(value: string): void;
+}): React.JSX.Element {
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => setDraft(value), [value]);
+
+  const commit = (): void => {
+    if (/^#[0-9A-F]{6}$/i.test(draft)) {
+      onChange(draft.toUpperCase());
+      return;
+    }
+    setDraft(value);
+  };
+
+  return (
+    <label className="color-field">
+      <span className="color-field__label">{label}</span>
+      <span className="color-field__controls">
+        <span className="color-field__swatch" style={{ background: value }}>
+          <input
+            type="color"
+            value={value}
+            aria-label={label}
+            onChange={(event) => onChange(event.currentTarget.value.toUpperCase())}
+          />
+        </span>
+        <input
+          className="color-field__hex"
+          type="text"
+          value={draft}
+          maxLength={7}
+          spellCheck={false}
+          aria-label={`${label} HEX`}
+          onChange={(event) => setDraft(event.currentTarget.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commit();
+              event.currentTarget.blur();
+            } else if (event.key === "Escape") {
+              setDraft(value);
+              event.currentTarget.blur();
+            }
+          }}
+        />
+      </span>
+    </label>
   );
 }

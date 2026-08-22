@@ -101,5 +101,7 @@ function providerLabel(provider: AgentPresenceSnapshot["provider"]): string {
   if (provider === "codex") return "Codex";
   if (provider === "claude") return "Claude";
   if (provider === "kimi") return "Kimi";
+  if (provider === "opencode") return "OpenCode";
+  if (provider === "hermes") return "Hermes";
   return "Agent";
 }

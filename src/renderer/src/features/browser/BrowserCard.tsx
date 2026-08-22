@@ -137,6 +137,7 @@ export function BrowserCard({
     const element = viewport.current;
     if (!element) return;
     const rect = element.getBoundingClientRect();
+    const clipRect = element.closest<HTMLElement>(".workspace")?.getBoundingClientRect();
     const state = viewportState.current;
     window.canvasTTY.browser.setViewport({
       x: rect.left,
@@ -144,6 +145,14 @@ export function BrowserCard({
       width: rect.width,
       height: rect.height,
       surface: state.surface,
+      ...(clipRect ? {
+        clipBounds: {
+          x: clipRect.left,
+          y: clipRect.top,
+          width: clipRect.width,
+          height: clipRect.height
+        }
+      } : {}),
       canvasScale: state.zoom,
       showAgentPresence: state.showAgentPresence
     });

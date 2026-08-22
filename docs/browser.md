@@ -18,7 +18,7 @@ Hiding the browser card does not close its tabs. **Close all** removes the tabs 
 
 | Setting | Behavior |
 |:--|:--|
-| **Agent access** | Allows CanvasTTY-launched Claude Code, Codex, and Kimi sessions to use the typed browser tool surface; enabled by default |
+| **Agent access** | Allows CanvasTTY-launched Claude Code, Codex, Kimi, OpenCode, and Hermes sessions to use the typed browser tool surface; enabled by default |
 | **Agent indicators** | Shows trusted-chrome badges after an agent actually uses a browser command and cursors only after a real pointer position exists; enabled by default |
 | **Restore tabs** | Persists tab order, active tab, and safe restore URLs; enabled by default |
 | **Downloads** | Shows up to six recent downloads and their local progress/status |
@@ -29,7 +29,7 @@ Clearing browser data does **not** delete the persistent audit log described bel
 
 ## Agent access
 
-Only agent sessions launched by CanvasTTY receive a per-launch browser connection. The main process passes a one-use bootstrap capability through the child environment to a bundled stdio MCP helper. Successful authentication rotates it to a session-scoped reconnect capability held only in helper memory; duplicate bootstrap authentication is accepted only while the same launch is already connected, and all access is revoked when its PTY ends. Linux/macOS use a current-user Unix socket; Windows uses a bundled native named-pipe host with a DACL for the exact current-user SID. Connecting and sending heartbeats does not mark an agent as active in the browser; presence begins with its first browser command.
+Only agent sessions launched by CanvasTTY receive a per-launch browser connection. The main process passes a one-use bootstrap capability through the child environment to a bundled stdio MCP helper. Claude and Codex receive per-run CLI arguments, OpenCode receives a launch-only `OPENCODE_CONFIG_CONTENT` MCP entry, Kimi uses a per-run file or recoverable temporary configuration, and Hermes receives a recoverable temporary `mcp_servers.canvastty_browser` entry whose capability fields reference the child environment. Successful authentication rotates the capability to a session-scoped reconnect capability held only in helper memory; duplicate bootstrap authentication is accepted only while the same launch is already connected, and all access is revoked when its PTY ends. Linux/macOS use a current-user Unix socket; Windows uses a bundled native named-pipe host with a DACL for the exact current-user SID. Connecting and sending heartbeats does not mark an agent as active in the browser; presence begins with its first browser command.
 
 The tool surface covers tabs, navigation, observation/read, screenshot, click/hover/type/select/press, scroll/drag, waits, dialogs, downloads, and the calling agent's activity. It does not expose cookies, saved passwords, authorization headers, local/session storage, arbitrary JavaScript, filesystem or shell access, raw CDP, a TCP listener, or a remote-debugging port.
 

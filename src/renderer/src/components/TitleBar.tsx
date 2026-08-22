@@ -1,7 +1,11 @@
 import type { LocaleId, WindowState } from "../../../shared/contracts";
+import appManifest from "../../../../package.json";
 import { ProviderIcon } from "./ProviderIcon";
 import { UiIcon } from "./UiIcon";
 import { t } from "../lib/i18n";
+
+const BUILD_CHANNEL = import.meta.env.DEV ? "DEV" : "RELEASE";
+const BUILD_LABEL = `${BUILD_CHANNEL} v${appManifest.version}`;
 
 interface TitleBarProps {
   locale: LocaleId;
@@ -34,7 +38,8 @@ export function TitleBar({ locale, windowState, onWindowStateChange }: TitleBarP
         <div className="titlebar__brand">
           <span className="titlebar__logo"><ProviderIcon provider="terminal" size="small" /></span>
           <strong>CanvasTTY</strong>
-          <span>{t(locale, "appSubtitle")}</span>
+          <span className={`titlebar__build titlebar__build--${BUILD_CHANNEL.toLowerCase()}`}>{BUILD_LABEL}</span>
+          <span className="titlebar__subtitle">{t(locale, "appSubtitle")}</span>
         </div>
         <div className="titlebar__drag" />
       </header>
@@ -46,7 +51,8 @@ export function TitleBar({ locale, windowState, onWindowStateChange }: TitleBarP
       <div className="titlebar__brand">
         <span className="titlebar__logo"><ProviderIcon provider="terminal" size="small" /></span>
         <strong>CanvasTTY</strong>
-        <span>{t(locale, "appSubtitle")}</span>
+        <span className={`titlebar__build titlebar__build--${BUILD_CHANNEL.toLowerCase()}`}>{BUILD_LABEL}</span>
+        <span className="titlebar__subtitle">{t(locale, "appSubtitle")}</span>
       </div>
       <div className="titlebar__drag" />
       {controls}

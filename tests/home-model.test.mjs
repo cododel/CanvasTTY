@@ -94,6 +94,21 @@ test("keeps every session row in newest-first order for the scrollable viewport"
   ]);
 });
 
+test("shows only the independently selected HOME limit providers", () => {
+  const currentSnapshot = snapshot([
+    limitWindow({ id: "codex:primary", minutes: 300, percent: 39 })
+  ]);
+  assert.deepEqual(
+    selectHomeModel([], currentSnapshot, "ready", 1_786_100_000_000, ["grok", "kimi", "opencode", "codex"])
+      .limitRows.map((row) => row.provider),
+    ["codex", "kimi", "opencode", "grok"]
+  );
+  assert.deepEqual(
+    selectHomeModel([], currentSnapshot, "ready", 1_786_100_000_000, []).limitRows,
+    []
+  );
+});
+
 test("formats window metadata and the visible reset countdown separately", () => {
   assert.equal(formatLimitDuration(300, "ru"), "5 ч");
   assert.equal(formatLimitDuration(10_080, "ru"), "7 д");

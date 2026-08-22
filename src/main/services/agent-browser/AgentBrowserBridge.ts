@@ -24,6 +24,7 @@ export interface AgentBrowserLaunchCoordinator {
 }
 
 export interface AgentBrowserBridgeOptions extends ProviderLaunchOptions {
+  recoverHermesOnStart?: boolean;
   recoverKimiOnStart?: boolean;
 }
 
@@ -34,6 +35,7 @@ export class AgentBrowserBridge implements AgentBrowserLaunchCoordinator {
   constructor(gateway: AgentGateway, options: AgentBrowserBridgeOptions) {
     this.gateway = gateway;
     this.providers = new ProviderLaunchAdapters(options);
+    if (options.recoverHermesOnStart) this.providers.recoverHermesConfiguration();
     if (options.recoverKimiOnStart) this.providers.recoverKimiConfiguration();
   }
 
@@ -66,7 +68,7 @@ export class AgentBrowserBridge implements AgentBrowserLaunchCoordinator {
       try {
         releaseConfiguration();
       } catch {
-        console.warn("CanvasTTY deferred cleanup of temporary Kimi browser configuration to recovery.");
+        console.warn("CanvasTTY deferred cleanup of temporary provider browser configuration to recovery.");
       }
     };
     let cleaned = false;
@@ -75,6 +77,7 @@ export class AgentBrowserBridge implements AgentBrowserLaunchCoordinator {
       connectionId: capability.connectionId,
       args: providerLaunch.args,
       environment: {
+        ...providerLaunch.environment,
         [AGENT_BROWSER_ENV.address]: capability.address,
         [AGENT_BROWSER_ENV.agentId]: capability.agentId,
         [AGENT_BROWSER_ENV.connectionId]: capability.connectionId,

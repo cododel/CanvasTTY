@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type {
+  LimitProviderId,
   LimitSource,
   LimitUnavailableReason,
   LimitWindow,
@@ -17,6 +18,8 @@ const MAX_LINE_BYTES = 1_048_576;
 const MAX_BUFFER_BYTES = MAX_LINE_BYTES * 2;
 const MAX_WINDOWS = 12;
 const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+const OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
+const GROK_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 
 interface CacheEntry {
   cachedAt: number;
@@ -49,6 +52,8 @@ export class LimitsService {
   private lastGoodCodex: Extract<ProviderLimitsSnapshot, { state: "available" }> | null = null;
   private lastGoodClaude: Extract<ProviderLimitsSnapshot, { state: "available" }> | null = null;
   private lastGoodKimi: Extract<ProviderLimitsSnapshot, { state: "available" }> | null = null;
+  private lastGoodOpenCode: Extract<ProviderLimitsSnapshot, { state: "available" }> | null = null;
+  private lastGoodGrok: Extract<ProviderLimitsSnapshot, { state: "available" }> | null = null;
   private disposed = false;
 
   constructor(clientVersion = "unknown") {
@@ -80,14 +85,16 @@ export class LimitsService {
 
   private async refresh(): Promise<LimitsSnapshot> {
     const checkedAt = Date.now();
-    const [codex, claude, kimi] = await Promise.all([
+    const [codex, claude, kimi, opencode, grok] = await Promise.all([
       this.loadCodex(checkedAt),
       this.loadClaude(checkedAt),
-      this.loadKimi(checkedAt)
+      this.loadKimi(checkedAt),
+      this.loadOpenCode(checkedAt),
+      this.loadGrok(checkedAt)
     ]);
     const value: LimitsSnapshot = {
       fetchedAt: Date.now(),
-      providers: [codex, claude, kimi]
+      providers: [codex, claude, kimi, opencode, grok]
     };
 
     this.cache = { cachedAt: Date.now(), value };
@@ -184,6 +191,64 @@ export class LimitsService {
       return unavailable("kimi", "kimi-usage-api", reason, checkedAt);
     }
   }
+
+  private async loadOpenCode(checkedAt: number): Promise<ProviderLimitsSnapshot> {
+    try {
+      const raw = await readOpenCodeGoUsage(this.clientVersion);
+      const windows = normalizeOpenCodeGoLimits(raw);
+      if (windows.length === 0) throw new LimitsAdapterError("protocol-error");
+
+      const available: Extract<ProviderLimitsSnapshot, { state: "available" }> = {
+        provider: "opencode",
+        state: "available",
+        source: "opencode-go-usage-api",
+        fetchedAt: Date.now(),
+        windows
+      };
+      this.lastGoodOpenCode = available;
+      return available;
+    } catch (error) {
+      const reason = adapterReason(error);
+      if (this.lastGoodOpenCode) {
+        return {
+          ...this.lastGoodOpenCode,
+          state: "stale",
+          failedAt: Date.now(),
+          reason
+        };
+      }
+      return unavailable("opencode", "opencode-go-usage-api", reason, checkedAt);
+    }
+  }
+
+  private async loadGrok(checkedAt: number): Promise<ProviderLimitsSnapshot> {
+    try {
+      const raw = await readGrokUsage(this.clientVersion);
+      const windows = normalizeGrokLimits(raw);
+      if (windows.length === 0) throw new LimitsAdapterError("protocol-error");
+
+      const available: Extract<ProviderLimitsSnapshot, { state: "available" }> = {
+        provider: "grok",
+        state: "available",
+        source: "grok-billing-api",
+        fetchedAt: Date.now(),
+        windows
+      };
+      this.lastGoodGrok = available;
+      return available;
+    } catch (error) {
+      const reason = adapterReason(error);
+      if (this.lastGoodGrok) {
+        return {
+          ...this.lastGoodGrok,
+          state: "stale",
+          failedAt: Date.now(),
+          reason
+        };
+      }
+      return unavailable("grok", "grok-billing-api", reason, checkedAt);
+    }
+  }
 }
 
 async function readClaudeUsage(clientVersion: string): Promise<unknown> {
@@ -197,6 +262,76 @@ async function readClaudeUsage(clientVersion: string): Promise<unknown> {
     "anthropic-beta": "oauth-2025-04-20",
     "user-agent": `canvastty/${clientVersion}`
   });
+}
+
+async function readOpenCodeGoUsage(clientVersion: string): Promise<unknown> {
+  const credentials = await readFirstCredentialFile(openCodeAuthPaths(), "subscription-required");
+  const go = isRecord(credentials["opencode-go"]) ? credentials["opencode-go"] : null;
+  const accessToken = cleanSecret(go?.key);
+  if (!accessToken) throw new LimitsAdapterError("subscription-required");
+
+  return fetchUsageJson(OPENCODE_GO_USAGE_URL, accessToken, {
+    "user-agent": `canvastty/${clientVersion}`
+  });
+}
+
+async function readGrokUsage(clientVersion: string): Promise<unknown> {
+  const configRoot = process.env.GROK_HOME || join(homedir(), ".grok");
+  const credentials = await readCredentialFile(join(configRoot, "auth.json"), "not-authenticated");
+  const accessToken = selectGrokAccessToken(credentials);
+  if (!accessToken) throw new LimitsAdapterError("not-authenticated");
+
+  return fetchUsageJson(GROK_BILLING_URL, accessToken, {
+    "x-xai-token-auth": "xai-grok-cli",
+    "user-agent": `canvastty/${clientVersion}`
+  });
+}
+
+function openCodeAuthPaths(): string[] {
+  const paths: string[] = [];
+  if (process.env.XDG_DATA_HOME) {
+    paths.push(join(process.env.XDG_DATA_HOME, "opencode", "auth.json"));
+  }
+  if (process.platform === "darwin") {
+    paths.push(join(homedir(), "Library", "Application Support", "opencode", "auth.json"));
+  } else if (process.platform === "win32" && process.env.LOCALAPPDATA) {
+    paths.push(join(process.env.LOCALAPPDATA, "opencode", "auth.json"));
+  }
+  paths.push(join(homedir(), ".local", "share", "opencode", "auth.json"));
+  return [...new Set(paths)];
+}
+
+async function readFirstCredentialFile(
+  paths: readonly string[],
+  missingReason: LimitUnavailableReason
+): Promise<Record<string, unknown>> {
+  for (const path of paths) {
+    try {
+      const raw = await readFile(path, "utf8");
+      const parsed: unknown = JSON.parse(raw);
+      if (!isRecord(parsed)) throw new LimitsAdapterError("protocol-error");
+      return parsed;
+    } catch (error) {
+      if (error instanceof LimitsAdapterError) throw error;
+      const code = isRecord(error) && typeof error.code === "string" ? error.code : null;
+      if (code === "ENOENT" || code === "EACCES") continue;
+      throw new LimitsAdapterError("protocol-error");
+    }
+  }
+  throw new LimitsAdapterError(missingReason);
+}
+
+function selectGrokAccessToken(credentials: Record<string, unknown>): string | null {
+  const candidates = Object.values(credentials)
+    .filter(isRecord)
+    .map((credential) => ({
+      token: cleanSecret(credential.key),
+      authMode: credential.auth_mode === "oidc" ? 1 : 0,
+      expiresAt: numericValue(credential.expires_at) ?? 0
+    }))
+    .filter((candidate): candidate is { token: string; authMode: number; expiresAt: number } => candidate.token !== null)
+    .sort((left, right) => right.authMode - left.authMode || right.expiresAt - left.expiresAt);
+  return candidates[0]?.token ?? null;
 }
 
 async function readCredentialFile(path: string, missingReason: LimitUnavailableReason): Promise<Record<string, unknown>> {
@@ -608,12 +743,77 @@ function adapterReason(error: unknown): LimitUnavailableReason {
 }
 
 function unavailable(
-  provider: "codex" | "claude" | "kimi",
+  provider: LimitProviderId,
   source: LimitSource,
   reason: LimitUnavailableReason,
   checkedAt: number
 ): ProviderLimitsSnapshot {
   return { provider, state: "unavailable", source, checkedAt, reason };
+}
+
+export function normalizeOpenCodeGoLimits(raw: unknown): LimitWindow[] {
+  if (!isRecord(raw) || !isRecord(raw.usage)) throw new LimitsAdapterError("protocol-error");
+  const usage = raw.usage;
+  const definitions: Array<{
+    key: "rolling" | "weekly" | "monthly";
+    slot: "primary" | "secondary";
+    label: string;
+    windowMinutes: number | null;
+  }> = [
+    { key: "rolling", slot: "primary", label: "5h", windowMinutes: 300 },
+    { key: "weekly", slot: "secondary", label: "7d", windowMinutes: 10_080 },
+    { key: "monthly", slot: "secondary", label: "monthly", windowMinutes: null }
+  ];
+
+  return definitions.flatMap(({ key, slot, label, windowMinutes }) => {
+    const candidate = usage[key];
+    if (!isRecord(candidate)) return [];
+    const usedPercent = numericValue(candidate.percent);
+    const resetsAt = epochMilliseconds(candidate.resetsAt);
+    if (usedPercent === null && resetsAt === null) return [];
+    return [{
+      id: `opencode-go:${key}`,
+      bucketId: "opencode-go",
+      slot,
+      isDefaultBucket: true,
+      label,
+      usedPercent: usedPercent === null ? null : clampPercent(usedPercent),
+      used: null,
+      limit: null,
+      windowMinutes,
+      resetsAt
+    }];
+  });
+}
+
+export function normalizeGrokLimits(raw: unknown): LimitWindow[] {
+  if (!isRecord(raw)) throw new LimitsAdapterError("protocol-error");
+  const config = isRecord(raw.config) ? raw.config : raw;
+  const period = isRecord(config.currentPeriod) ? config.currentPeriod : {};
+  const usedPercent = numericValue(config.creditUsagePercent);
+  const startsAt = epochMilliseconds(period.start ?? config.billingPeriodStart);
+  const resetsAt = epochMilliseconds(period.end ?? config.billingPeriodEnd);
+  if (usedPercent === null && resetsAt === null) return [];
+
+  const rawWindowMinutes = startsAt !== null && resetsAt !== null
+    ? Math.round((resetsAt - startsAt) / 60_000)
+    : null;
+  const windowMinutes = rawWindowMinutes !== null && rawWindowMinutes > 0 ? rawWindowMinutes : null;
+  const periodType = typeof period.type === "string" ? period.type.toLowerCase() : "period";
+  const isWeekly = periodType.includes("week") || windowMinutes === 10_080;
+
+  return [{
+    id: isWeekly ? "grok:weekly" : `grok:${cleanId(periodType) ?? "period"}`,
+    bucketId: "grok",
+    slot: "secondary",
+    isDefaultBucket: true,
+    label: windowMinutes === null ? null : formatWindowLabel(windowMinutes),
+    usedPercent: usedPercent === null ? null : clampPercent(usedPercent),
+    used: null,
+    limit: null,
+    windowMinutes,
+    resetsAt
+  }];
 }
 
 export function normalizeClaudeLimits(raw: unknown): LimitWindow[] {

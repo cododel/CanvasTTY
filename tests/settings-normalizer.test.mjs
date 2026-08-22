@@ -13,6 +13,17 @@ import {
 const fallback = {
   locale: "en",
   palette: "sage",
+  homeAccentPreset: "classic",
+  homeAccentColors: {
+    clock: "#D8E1C5",
+    launcher: "#B8CF99",
+    browser: "#9CC7DC",
+    settings: "#D5A2C9",
+    media: "#D5A2C9"
+  },
+  homeLauncherProviders: ["codex", "claude", "kimi", "opencode", "hermes", "grok"],
+  homeLimitProviders: ["codex", "claude", "kimi", "opencode", "grok"],
+  canvasColor: "sage",
   pattern: "dots",
   snapToGrid: true,
   invertTerminalWheel: true,
@@ -91,6 +102,11 @@ test("older settings files without the new keys inherit defaults", () => {
   const normalized = normalizeSettings({ locale: "ru", snapToGrid: false }, fallback);
   assert.equal(normalized.locale, "ru");
   assert.equal(normalized.snapToGrid, false);
+  assert.equal(normalized.homeAccentPreset, fallback.homeAccentPreset);
+  assert.deepEqual(normalized.homeAccentColors, fallback.homeAccentColors);
+  assert.deepEqual(normalized.homeLauncherProviders, fallback.homeLauncherProviders);
+  assert.deepEqual(normalized.homeLimitProviders, fallback.homeLimitProviders);
+  assert.equal(normalized.canvasColor, fallback.canvasColor);
   assert.equal(normalized.edgePan, fallback.edgePan);
   assert.equal(normalized.edgePanSpeed, fallback.edgePanSpeed);
   assert.equal(normalized.zoomSensitivity, fallback.zoomSensitivity);
@@ -99,6 +115,167 @@ test("older settings files without the new keys inherit defaults", () => {
   assert.equal(normalized.invertCanvasWheel, fallback.invertCanvasWheel);
   assert.equal(normalized.hoverFocus, fallback.hoverFocus);
   assert.equal(normalized.hoverFocusSpeed, fallback.hoverFocusSpeed);
+});
+
+test("normalizes HOME accents, Canvas colors, and the expanded pattern set", () => {
+  const normalized = normalizeSettings({
+    homeAccentPreset: "custom",
+    homeAccentColors: {
+      clock: "#102030",
+      launcher: "#aabbcc",
+      browser: "#334455",
+      settings: "#DDEEFF",
+      media: "#778899"
+    },
+    canvasColor: "slate",
+    pattern: "rings"
+  }, fallback);
+
+  assert.equal(normalized.homeAccentPreset, "custom");
+  assert.deepEqual(normalized.homeAccentColors, {
+    clock: "#102030",
+    launcher: "#AABBCC",
+    browser: "#334455",
+    settings: "#DDEEFF",
+    media: "#778899"
+  });
+  assert.equal(normalized.canvasColor, "slate");
+  assert.equal(normalized.pattern, "rings");
+
+  const invalid = normalizeSettings({
+    homeAccentPreset: "rainbow",
+    homeAccentColors: {
+      clock: "red",
+      launcher: "#123",
+      browser: "url(file:///tmp/nope)",
+      settings: "#12345678",
+      media: null
+    },
+    canvasColor: "transparent",
+    pattern: "noise"
+  }, fallback);
+  assert.equal(invalid.homeAccentPreset, fallback.homeAccentPreset);
+  assert.deepEqual(invalid.homeAccentColors, fallback.homeAccentColors);
+  assert.equal(invalid.canvasColor, fallback.canvasColor);
+  assert.equal(invalid.pattern, fallback.pattern);
+});
+
+test("migrates legacy palette-backed Canvas colors to an independent concrete background", () => {
+  assert.equal(normalizeSettings({ palette: "night", canvasColor: "palette" }, fallback).canvasColor, "night");
+  assert.equal(normalizeSettings({ palette: "lilac" }, fallback).canvasColor, "lilac");
+});
+
+test("normalizes the HOME launcher provider selection in canonical order", () => {
+  assert.deepEqual(
+    normalizeSettings({ homeLauncherProviders: ["hermes", "opencode", "unknown", "hermes"] }, fallback)
+      .homeLauncherProviders,
+    ["opencode", "hermes"]
+  );
+  assert.deepEqual(normalizeSettings({ homeLauncherProviders: [] }, fallback).homeLauncherProviders, []);
+  assert.deepEqual(
+    normalizeSettings({ homeLauncherProviders: "codex" }, fallback).homeLauncherProviders,
+    fallback.homeLauncherProviders
+  );
+});
+
+test("normalizes the HOME limit provider selection independently in canonical order", () => {
+  const normalized = normalizeSettings({
+    homeLauncherProviders: ["grok"],
+    homeLimitProviders: ["kimi", "unknown", "opencode", "codex", "kimi", "grok"]
+  }, fallback);
+  assert.deepEqual(normalized.homeLauncherProviders, ["grok"]);
+  assert.deepEqual(normalized.homeLimitProviders, ["codex", "kimi", "opencode", "grok"]);
+  assert.deepEqual(normalizeSettings({ homeLimitProviders: [] }, fallback).homeLimitProviders, []);
+  assert.deepEqual(
+    normalizeSettings({ homeLimitProviders: "kimi" }, fallback).homeLimitProviders,
+    fallback.homeLimitProviders
+  );
+});
+
+test("a persisted pre-Grok launcher subset gains Grok exactly once", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "canvastty-settings-grok-migration-"));
+  try {
+    await writeFile(join(dir, "settings.json"), JSON.stringify({
+      ...fallback,
+      homeLauncherProviders: ["codex", "kimi", "hermes"]
+    }));
+    const store = new SettingsStore(dir, "en");
+    const loaded = await store.load();
+    assert.deepEqual(loaded.homeLauncherProviders, ["codex", "kimi", "hermes", "grok"]);
+
+    await store.update({ homeLauncherProviders: ["codex", "claude", "kimi", "opencode", "hermes"] });
+    const reloaded = new SettingsStore(dir, "en");
+    assert.deepEqual(
+      (await reloaded.load()).homeLauncherProviders,
+      ["codex", "claude", "kimi", "opencode", "hermes"]
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the limit-display migration preserves a version-three launcher subset", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "canvastty-settings-limit-migration-"));
+  try {
+    await writeFile(join(dir, "settings.json"), JSON.stringify({
+      ...fallback,
+      settingsVersion: 3,
+      homeLauncherProviders: ["codex", "kimi"],
+      homeLimitProviders: ["codex", "claude", "kimi"]
+    }));
+    const store = new SettingsStore(dir, "en");
+    const loaded = await store.load();
+    assert.deepEqual(loaded.homeLauncherProviders, ["codex", "kimi"]);
+    assert.deepEqual(loaded.homeLimitProviders, fallback.homeLimitProviders);
+
+    const persisted = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
+    assert.equal(persisted.settingsVersion, 5);
+    assert.deepEqual(persisted.homeLimitProviders, fallback.homeLimitProviders);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the expanded limit migration preserves a curated version-four subset", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "canvastty-settings-limit-subset-migration-"));
+  try {
+    await writeFile(join(dir, "settings.json"), JSON.stringify({
+      ...fallback,
+      settingsVersion: 4,
+      homeLimitProviders: ["kimi"]
+    }));
+    const loaded = await new SettingsStore(dir, "en").load();
+    assert.deepEqual(loaded.homeLimitProviders, ["kimi"]);
+
+    const persisted = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
+    assert.equal(persisted.settingsVersion, 5);
+    assert.deepEqual(persisted.homeLimitProviders, ["kimi"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the HOME limit selection persists without changing the launcher selection", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "canvastty-settings-limit-selection-"));
+  try {
+    const store = new SettingsStore(dir, "en");
+    await store.load();
+    await store.update({ homeLimitProviders: ["kimi"] });
+
+    const reloaded = new SettingsStore(dir, "en");
+    const loaded = await reloaded.load();
+    assert.deepEqual(loaded.homeLimitProviders, ["kimi"]);
+    assert.deepEqual(loaded.homeLauncherProviders, fallback.homeLauncherProviders);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode and Hermes dangerous-profile acknowledgements survive normalization", () => {
+  const normalized = normalizeSettings({
+    acknowledgedDangerousProfiles: ["opencode", "hermes", "unknown", "codex"]
+  }, fallback);
+  assert.deepEqual(normalized.acknowledgedDangerousProfiles, ["opencode", "hermes", "codex"]);
 });
 
 test("a non-object candidate yields the fallback wholesale", () => {
@@ -124,6 +301,12 @@ test("fresh installs default to scroll pan and key-gated widget wheel input", as
     assert.equal(store.get().hoverFocus, false);
     assert.equal(store.get().hoverFocusSpeed, "normal");
     assert.equal(store.get().showShortcutHints, true);
+    assert.equal(store.get().homeAccentPreset, "classic");
+    assert.deepEqual(store.get().homeAccentColors, fallback.homeAccentColors);
+    assert.deepEqual(store.get().homeLauncherProviders, fallback.homeLauncherProviders);
+    assert.deepEqual(store.get().homeLimitProviders, fallback.homeLimitProviders);
+    assert.equal(store.get().canvasColor, "sage");
+    assert.equal(store.get().pattern, "dots");
     assert.deepEqual(store.get().homeGridSize, { columns: 16, rows: 12 });
     assert.equal(store.get().browserCanvas, null);
     assert.equal(store.get().browserAgentAccess, true);
@@ -174,6 +357,10 @@ test("existing settings migrate to wheel zoom and preserve legacy widget capture
     assert.equal(persisted.zoomOverApplications, false);
     assert.equal(persisted.canvasNavigationOverride, "Alt");
     assert.equal(persisted.canvasWheelOverride, null);
+    assert.equal(persisted.homeAccentPreset, "classic");
+    assert.deepEqual(persisted.homeLauncherProviders, fallback.homeLauncherProviders);
+    assert.deepEqual(persisted.homeLimitProviders, fallback.homeLimitProviders);
+    assert.equal(persisted.canvasColor, "sage");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

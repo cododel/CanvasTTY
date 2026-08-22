@@ -5,12 +5,16 @@ import type {
   AgentProviderId,
   AppSettings,
   BrowserCanvasState,
+  CanvasColorId,
   CanvasWheelCaptureMode,
   CanvasPatternId,
   EdgePanSpeed,
   FocusActivation,
+  HomeAccentColors,
+  HomeAccentPresetId,
   HomeGridSize,
   HomeWidgetPlacement,
+  LimitProviderId,
   LocaleId,
   MediaFit,
   PaletteId,
@@ -19,6 +23,7 @@ import type {
   ZoomSensitivity
 } from "../../shared/contracts";
 import {
+  DEFAULT_HOME_ACCENT_COLORS,
   DEFAULT_HOME_GRID_SIZE,
   DEFAULT_HOME_LAYOUT,
   HOME_GRID_MAX_COLUMNS,
@@ -35,9 +40,17 @@ import {
 
 const LOCALES = new Set<LocaleId>(["ru", "en"]);
 const PALETTES = new Set<PaletteId>(["sage", "lilac", "night"]);
-const PATTERNS = new Set<CanvasPatternId>(["dots", "grid", "waves", "none"]);
+const HOME_ACCENT_PRESETS = new Set<HomeAccentPresetId>(["classic", "warm", "cool", "mono", "custom"]);
+const CANVAS_COLORS = new Set<CanvasColorId>(["sage", "lilac", "night", "sand", "mist", "rose", "slate"]);
+const PATTERNS = new Set<CanvasPatternId>(["dots", "grid", "waves", "diagonal", "rings", "none"]);
 const MEDIA_FITS = new Set<MediaFit>(["cover", "contain"]);
-const AGENT_PROVIDERS = new Set<AgentProviderId>(["codex", "claude", "kimi"]);
+const SETTINGS_VERSION = 5;
+const GROK_LAUNCHER_SETTINGS_VERSION = 3;
+const LEGACY_AGENT_PROVIDERS: AgentProviderId[] = ["codex", "claude", "kimi", "opencode", "hermes"];
+const AGENT_PROVIDERS = new Set<AgentProviderId>([...LEGACY_AGENT_PROVIDERS, "grok"]);
+const LEGACY_LIMIT_PROVIDERS: LimitProviderId[] = ["codex", "claude", "kimi"];
+const LIMIT_PROVIDERS: LimitProviderId[] = [...LEGACY_LIMIT_PROVIDERS, "opencode", "grok"];
+const LIMIT_PROVIDER_SET = new Set<LimitProviderId>(LIMIT_PROVIDERS);
 const EDGE_PAN_SPEEDS = new Set<EdgePanSpeed>(["slow", "normal", "fast"]);
 const ZOOM_SENSITIVITIES = new Set<ZoomSensitivity>(["slow", "normal", "fast"]);
 const FOCUS_ACTIVATIONS = new Set<FocusActivation>(["off", "single", "double"]);
@@ -63,12 +76,38 @@ export class SettingsStore {
       const raw = await readFile(this.filePath, "utf8");
       const candidate: unknown = JSON.parse(raw);
       const source = candidate && typeof candidate === "object" ? candidate as Record<string, unknown> : {};
+      const persistedLauncherProviders = Array.isArray(source.homeLauncherProviders)
+        ? source.homeLauncherProviders
+        : null;
+      const persistedLimitProviders = Array.isArray(source.homeLimitProviders)
+        ? source.homeLimitProviders
+        : null;
+      const persistedVersion = typeof source.settingsVersion === "number" ? source.settingsVersion : 0;
+      const needsGrokLauncherMigration = persistedVersion < GROK_LAUNCHER_SETTINGS_VERSION
+        && persistedLauncherProviders !== null
+        && !persistedLauncherProviders.includes("grok");
+      const needsExpandedLimitMigration = persistedVersion < SETTINGS_VERSION
+        && isLegacyDefaultLimitSelection(persistedLimitProviders);
       this.hasPersistedLegacyWheelCapture = Object.hasOwn(source, "zoomOverApplications");
       const needsMigration = !("useScrollWheelToZoom" in source)
         || !("canvasNavigationOverride" in source)
         || !("canvasWheelOverride" in source)
-        || !("canvasWheelCaptureMode" in source);
-      this.value = normalizeSettings(candidate, {
+        || !("canvasWheelCaptureMode" in source)
+        || !("homeAccentPreset" in source)
+        || !("homeAccentColors" in source)
+        || !("homeLauncherProviders" in source)
+        || !("homeLimitProviders" in source)
+        || !("canvasColor" in source)
+        || source.canvasColor === "palette"
+        || source.settingsVersion !== SETTINGS_VERSION;
+      let migratedCandidate: Record<string, unknown> = source;
+      if (needsGrokLauncherMigration && persistedLauncherProviders) {
+        migratedCandidate = { ...migratedCandidate, homeLauncherProviders: [...persistedLauncherProviders, "grok"] };
+      }
+      if (needsExpandedLimitMigration) {
+        migratedCandidate = { ...migratedCandidate, homeLimitProviders: [...LIMIT_PROVIDERS] };
+      }
+      this.value = normalizeSettings(migratedCandidate, {
         ...this.value,
         useScrollWheelToZoom: true
       }, this.platform);
@@ -101,7 +140,10 @@ export class SettingsStore {
   }
 
   private persist(): Promise<void> {
-    const persistedValue: Partial<AppSettings> & { zoomOverApplications?: boolean } = { ...this.value };
+    const persistedValue: Partial<AppSettings> & {
+      settingsVersion: number;
+      zoomOverApplications?: boolean;
+    } = { ...this.value, settingsVersion: SETTINGS_VERSION };
     if (this.hasPersistedLegacyWheelCapture) {
       persistedValue.zoomOverApplications = this.value.canvasWheelCaptureMode === "always";
     }
@@ -119,10 +161,21 @@ export class SettingsStore {
   }
 }
 
+function isLegacyDefaultLimitSelection(candidate: unknown[] | null): boolean {
+  return candidate !== null
+    && candidate.length === LEGACY_LIMIT_PROVIDERS.length
+    && LEGACY_LIMIT_PROVIDERS.every((provider) => candidate.includes(provider));
+}
+
 function createDefaults(systemLocale: string, platform: CanvasNavigationPlatform): AppSettings {
   return {
     locale: systemLocale.toLowerCase().startsWith("ru") ? "ru" : "en",
     palette: "sage",
+    homeAccentPreset: "classic",
+    homeAccentColors: { ...DEFAULT_HOME_ACCENT_COLORS },
+    homeLauncherProviders: [...AGENT_PROVIDERS],
+    homeLimitProviders: [...LIMIT_PROVIDERS],
+    canvasColor: "sage",
     pattern: "dots",
     snapToGrid: true,
     invertTerminalWheel: true,
@@ -193,10 +246,36 @@ export function normalizeSettings(
   );
   const pluginCanvas = normalizePluginCanvas(source.pluginCanvas, fallback.pluginCanvas ?? []);
   const browserCanvas = normalizeBrowserCanvas(source.browserCanvas, fallback.browserCanvas ?? null);
+  const homeAccentColors = normalizeHomeAccentColors(
+    source.homeAccentColors,
+    fallback.homeAccentColors ?? DEFAULT_HOME_ACCENT_COLORS
+  );
+  const homeLauncherProviders = normalizeAgentProviderSelection(
+    source.homeLauncherProviders,
+    fallback.homeLauncherProviders ?? [...AGENT_PROVIDERS]
+  );
+  const homeLimitProviders = normalizeLimitProviderSelection(
+    source.homeLimitProviders,
+    fallback.homeLimitProviders ?? LIMIT_PROVIDERS
+  );
+  const palette = PALETTES.has(source.palette as PaletteId) ? source.palette as PaletteId : fallback.palette;
+  const canvasColorCandidate = (source as Record<string, unknown>).canvasColor;
+  const canvasColor = canvasColorCandidate === undefined || canvasColorCandidate === "palette"
+    ? palette
+    : CANVAS_COLORS.has(canvasColorCandidate as CanvasColorId)
+      ? canvasColorCandidate as CanvasColorId
+      : fallback.canvasColor;
 
   return {
     locale: LOCALES.has(source.locale as LocaleId) ? source.locale as LocaleId : fallback.locale,
-    palette: PALETTES.has(source.palette as PaletteId) ? source.palette as PaletteId : fallback.palette,
+    palette,
+    homeAccentPreset: HOME_ACCENT_PRESETS.has(source.homeAccentPreset as HomeAccentPresetId)
+      ? source.homeAccentPreset as HomeAccentPresetId
+      : fallback.homeAccentPreset,
+    homeAccentColors,
+    homeLauncherProviders,
+    homeLimitProviders,
+    canvasColor,
     pattern: PATTERNS.has(source.pattern as CanvasPatternId)
       ? source.pattern as CanvasPatternId
       : fallback.pattern,
@@ -251,6 +330,47 @@ export function normalizeSettings(
       ? source.browserRestoreTabs
       : fallback.browserRestoreTabs
   };
+}
+
+function normalizeHomeAccentColors(candidate: unknown, fallback: HomeAccentColors): HomeAccentColors {
+  const source = candidate && typeof candidate === "object" && !Array.isArray(candidate)
+    ? candidate as Partial<HomeAccentColors>
+    : {};
+  return {
+    clock: normalizeHexColor(source.clock, fallback.clock),
+    launcher: normalizeHexColor(source.launcher, fallback.launcher),
+    browser: normalizeHexColor(source.browser, fallback.browser),
+    settings: normalizeHexColor(source.settings, fallback.settings),
+    media: normalizeHexColor(source.media, fallback.media)
+  };
+}
+
+function normalizeAgentProviderSelection(
+  candidate: unknown,
+  fallback: AgentProviderId[]
+): AgentProviderId[] {
+  if (!Array.isArray(candidate)) return [...fallback];
+  const selected = new Set(candidate.filter((provider): provider is AgentProviderId => (
+    typeof provider === "string" && AGENT_PROVIDERS.has(provider as AgentProviderId)
+  )));
+  return [...AGENT_PROVIDERS].filter((provider) => selected.has(provider));
+}
+
+function normalizeLimitProviderSelection(
+  candidate: unknown,
+  fallback: LimitProviderId[]
+): LimitProviderId[] {
+  if (!Array.isArray(candidate)) return [...fallback];
+  const selected = new Set(candidate.filter((provider): provider is LimitProviderId => (
+    typeof provider === "string" && LIMIT_PROVIDER_SET.has(provider as LimitProviderId)
+  )));
+  return LIMIT_PROVIDERS.filter((provider) => selected.has(provider));
+}
+
+function normalizeHexColor(candidate: unknown, fallback: string): string {
+  return typeof candidate === "string" && /^#[0-9A-F]{6}$/i.test(candidate)
+    ? candidate.toUpperCase()
+    : fallback;
 }
 
 function normalizeCanvasWheelCapture(

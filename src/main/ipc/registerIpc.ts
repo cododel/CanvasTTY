@@ -659,7 +659,7 @@ async function pickPluginMediaLibrary(
 }
 
 function providerValue(value: unknown): ProviderId {
-  if (value === "terminal" || value === "codex" || value === "claude" || value === "kimi") return value;
+  if (value === "terminal" || value === "codex" || value === "claude" || value === "kimi" || value === "opencode" || value === "hermes" || value === "grok") return value;
   throw new Error("Plugin requested an unknown launcher provider.");
 }
 

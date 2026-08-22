@@ -14,6 +14,7 @@ import {
 } from "../../../agent-browser/tool-catalog.mjs";
 
 const EXPECTED_TOOL = `mcp__${MCP_SERVER_NAME}__browser_list_tabs`;
+const OPENCODE_EXPECTED_TOOL = `${MCP_SERVER_NAME}_browser_list_tabs`;
 const SMOKE_OK = "CANVASTTY_PROVIDER_SMOKE_OK";
 const MAX_OUTPUT_BYTES = 256 * 1024;
 const DIRECT_TIMEOUT_MS = 15_000;
@@ -113,9 +114,10 @@ async function runProviderCli(
 }
 
 export function providerSmokeArguments(provider: AgentProvider, launchArgs: string[], cwd: string): string[] {
+  const expectedTool = provider === "opencode" ? OPENCODE_EXPECTED_TOOL : EXPECTED_TOOL;
   const prompt = [
     "This is a deterministic integration smoke test.",
-    `Call exactly one tool: ${EXPECTED_TOOL} with {}.`,
+    `Call exactly one tool: ${expectedTool} with {}.`,
     "Do not call any other tool.",
     `After the tool result, reply exactly ${SMOKE_OK}.`
   ].join(" ");
@@ -142,6 +144,12 @@ export function providerSmokeArguments(provider: AgentProvider, launchArgs: stri
       "stream-json",
       "--verbose"
     ];
+  }
+  if (provider === "opencode") {
+    return ["run", ...launchArgs, "--format", "json", "--dir", cwd, prompt];
+  }
+  if (provider === "hermes") {
+    return [...launchArgs, "-z", prompt];
   }
   return [
     "exec",
@@ -196,9 +204,16 @@ function assertExactToolCatalog(names: string[]): void {
 }
 
 export function assertProviderTranscript(provider: AgentProvider, stdout: string): void {
+  if (provider === "hermes") {
+    if (stdout.trim() !== SMOKE_OK) {
+      throw new Error("Provider hermes did not finish the smoke turn with the exact marker.");
+    }
+    return;
+  }
   const events = parseJsonLines(stdout);
   const calls = collectToolCalls(provider, events);
-  if (calls.length !== 1 || calls[0].name !== EXPECTED_TOOL) {
+  const expectedTool = provider === "opencode" ? OPENCODE_EXPECTED_TOOL : EXPECTED_TOOL;
+  if (calls.length !== 1 || calls[0].name !== expectedTool) {
     throw new Error(
       `Provider ${provider} invoked an unexpected tool sequence: ${canonicalStringify(calls.map((call) => call.name))}.`
     );
@@ -265,6 +280,9 @@ function collectToolCalls(provider: AgentProvider, events: unknown[]): ProviderT
     } else if (provider === "codex" && isCodexActionItem(object.type)) {
       const id = typeof object.id === "string" ? object.id : path;
       record(id, `codex__${String(object.type)}`);
+    } else if (provider === "opencode" && object.type === "tool" && typeof object.tool === "string") {
+      const id = typeof object.callID === "string" ? object.callID : path;
+      record(id, object.tool);
     }
     for (const [key, child] of Object.entries(object)) walk(child, `${path}.${key}`);
   };
@@ -313,6 +331,16 @@ function hasSuccessfulToolResult(
       && containsSuccessfulBrowserResult(object.content)) {
       matched = true;
       return;
+    }
+    if (provider === "opencode"
+      && object.type === "tool"
+      && object.callID === call.id
+      && object.tool === call.name) {
+      const state = asRecord(object.state);
+      if (state?.status === "completed" && containsSuccessfulBrowserResult(state.output)) {
+        matched = true;
+        return;
+      }
     }
     Object.values(object).forEach(walk);
   };

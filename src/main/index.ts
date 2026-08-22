@@ -30,6 +30,10 @@ import {
   resolveKimiHomeDirectory
 } from "./services/agent-browser/ProviderLaunch";
 import type { StdioHelperLaunch } from "./services/agent-browser/ProviderLaunch";
+import {
+  recoverHermesConfigurationOnStartup,
+  resolveHermesHomeDirectory
+} from "./services/hermesConfig";
 import { startupPageUrl } from "./startupPage";
 import { mainWindowChromeOptions } from "./windowChrome";
 
@@ -116,8 +120,10 @@ async function createWindow(): Promise<BrowserWindow> {
 
 async function initializeServices(): Promise<void> {
   augmentCliPath();
-  // Recovery is independent of gateway availability: an interrupted Kimi fallback
-  // must be restored before any new terminal can launch, including on Windows.
+  // Recovery is independent of gateway availability: interrupted provider config
+  // overlays must be restored before any new terminal can launch, including on Windows.
+  const hermesHomeDirectory = resolveHermesHomeDirectory();
+  recoverHermesConfigurationOnStartup(hermesHomeDirectory);
   const kimiHomeDirectory = resolveKimiHomeDirectory();
   recoverKimiConfigurationOnStartup(kimiHomeDirectory);
   const userDataPath = app.getPath("userData");
@@ -174,6 +180,7 @@ async function initializeServices(): Promise<void> {
     agentBrowserBridge = new AgentBrowserBridge(agentGateway, {
       helper: agentBrowserHelper,
       runtimeDirectory,
+      hermesHomeDirectory,
       kimiHomeDirectory,
       ...(process.env.CANVASTTY_PROVIDER_SMOKE_KIMI_COMMAND
         ? { kimiCommand: process.env.CANVASTTY_PROVIDER_SMOKE_KIMI_COMMAND }
@@ -284,6 +291,12 @@ async function loadApplication(window: BrowserWindow): Promise<void> {
           : {}),
         ...(process.env.CANVASTTY_PROVIDER_SMOKE_CODEX_COMMAND
           ? { codex: process.env.CANVASTTY_PROVIDER_SMOKE_CODEX_COMMAND }
+          : {}),
+        ...(process.env.CANVASTTY_PROVIDER_SMOKE_OPENCODE_COMMAND
+          ? { opencode: process.env.CANVASTTY_PROVIDER_SMOKE_OPENCODE_COMMAND }
+          : {}),
+        ...(process.env.CANVASTTY_PROVIDER_SMOKE_HERMES_COMMAND
+          ? { hermes: process.env.CANVASTTY_PROVIDER_SMOKE_HERMES_COMMAND }
           : {})
       }
     });
@@ -293,7 +306,7 @@ async function loadApplication(window: BrowserWindow): Promise<void> {
 }
 
 function parseProviderSmokeTargets(value: string): ProviderSmokeTarget[] {
-  const allowed = new Set<ProviderSmokeTarget>(["direct", "claude", "codex", "kimi"]);
+  const allowed = new Set<ProviderSmokeTarget>(["direct", "claude", "codex", "kimi", "opencode", "hermes"]);
   const targets = value.split(",").map((target) => target.trim()).filter(Boolean);
   if (targets.length === 0 || targets.some((target) => !allowed.has(target as ProviderSmokeTarget))) {
     throw new Error("CANVASTTY_PROVIDER_SMOKE contains an unsupported target.");

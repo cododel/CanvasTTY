@@ -1,19 +1,19 @@
 import type {
-  AgentProviderId,
   LimitUnavailableReason,
+  LimitProviderId,
   LimitWindow,
   LimitsSnapshot,
   LocaleId,
   SessionSnapshot
 } from "../../../../shared/contracts";
 
-const LIMIT_PROVIDERS: AgentProviderId[] = ["codex", "claude", "kimi"];
+const DEFAULT_LIMIT_PROVIDERS: LimitProviderId[] = ["codex", "claude", "kimi", "opencode", "grok"];
 
 export type LimitsLoadState = "loading" | "ready" | "error";
 export type HomeLimitReason = LimitUnavailableReason | "percentage-unavailable" | "reset-unavailable" | "refresh-error";
 
 export interface HomeLimitRow {
-  provider: AgentProviderId;
+  provider: LimitProviderId;
   state: "loading" | "available" | "stale" | "unavailable" | "error";
   window: HomeLimitWindow | null;
   reason: HomeLimitReason | null;
@@ -35,12 +35,16 @@ export function selectHomeModel(
   sessions: readonly SessionSnapshot[],
   limits: LimitsSnapshot | null,
   limitsLoadState: LimitsLoadState,
-  currentTime = Date.now()
+  currentTime = Date.now(),
+  limitProviders: readonly LimitProviderId[] = DEFAULT_LIMIT_PROVIDERS
 ): HomeModel {
   const newestFirst = [...sessions].sort((left, right) => right.startedAt - left.startedAt);
+  const selectedLimitProviders = new Set(limitProviders);
 
   return {
-    limitRows: LIMIT_PROVIDERS.map((provider) => selectProviderLimit(provider, limits, limitsLoadState, currentTime)),
+    limitRows: DEFAULT_LIMIT_PROVIDERS
+      .filter((provider) => selectedLimitProviders.has(provider))
+      .map((provider) => selectProviderLimit(provider, limits, limitsLoadState, currentTime)),
     sessionRows: newestFirst
   };
 }
@@ -78,7 +82,7 @@ export function formatResetCountdown(resetsAt: number, currentTime: number, loca
 }
 
 function selectProviderLimit(
-  provider: AgentProviderId,
+  provider: LimitProviderId,
   snapshot: LimitsSnapshot | null,
   loadState: LimitsLoadState,
   currentTime: number

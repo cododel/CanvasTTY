@@ -22,6 +22,17 @@
   --accent: #f27652;
   --danger: #e3615e;
   --success: #a9d278;
+  --home-clock: #d8e1c5;
+  --home-clock-text: #30313d;
+  --home-launcher-dock: #b8cf99;
+  --home-launcher-tile: #d8e1c5;
+  --home-launcher-text: #30313d;
+  --home-browser: #9cc7dc;
+  --home-browser-text: #30313d;
+  --home-settings: #d5a2c9;
+  --home-settings-text: #30313d;
+  --home-media: #d5a2c9;
+  --home-media-text: #30313d;
   --dot: rgba(250, 248, 235, 0.16);
   --border: rgba(31, 32, 42, 0.14);
   --shadow-sm: 0 5px 14px rgba(25, 25, 35, 0.14);
@@ -64,3 +75,53 @@
   --shadow-md: 0 15px 34px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 30px 70px rgba(0, 0, 0, 0.48);
 }
+
+.app--home-warm {
+  --home-clock: #f1d4a8;
+  --home-clock-text: #3d3028;
+  --home-launcher-dock: #d99872;
+  --home-launcher-tile: #f0c9b0;
+  --home-launcher-text: #3d3028;
+  --home-browser: #a9cad6;
+  --home-browser-text: #29343b;
+  --home-settings: #d99aa6;
+  --home-settings-text: #3d2c34;
+  --home-media: #e7b77d;
+  --home-media-text: #3d3028;
+}
+
+.app--home-cool {
+  --home-clock: #c4dce2;
+  --home-clock-text: #27363d;
+  --home-launcher-dock: #8ab7c5;
+  --home-launcher-tile: #c2dce3;
+  --home-launcher-text: #27363d;
+  --home-browser: #a9b9e3;
+  --home-browser-text: #293044;
+  --home-settings: #c3a9d9;
+  --home-settings-text: #342c3d;
+  --home-media: #9fcac1;
+  --home-media-text: #263936;
+}
+
+.app--home-mono {
+  --home-clock: #d8dce1;
+  --home-clock-text: #2f333a;
+  --home-launcher-dock: #89919e;
+  --home-launcher-tile: #cbd0d6;
+  --home-launcher-text: #2f333a;
+  --home-browser: #aab2be;
+  --home-browser-text: #2f333a;
+  --home-settings: #c3c7ce;
+  --home-settings-text: #2f333a;
+  --home-media: #afb5bd;
+  --home-media-text: #2f333a;
+}
+
+.app--canvas-sage { --canvas-bg: #aaa7a2; --dot: rgba(250, 248, 235, 0.16); }
+.app--canvas-lilac { --canvas-bg: #b8adb9; --dot: rgba(255, 248, 255, 0.16); }
+.app--canvas-night { --canvas-bg: #222632; --dot: rgba(216, 224, 237, 0.1); }
+.app--canvas-sand { --canvas-bg: #b9ad96; --dot: rgba(255, 250, 238, 0.18); }
+.app--canvas-mist { --canvas-bg: #a9b9bd; --dot: rgba(244, 251, 252, 0.18); }
+.app--canvas-rose { --canvas-bg: #b9a6ad; --dot: rgba(255, 245, 249, 0.17); }
+.app--canvas-slate { --canvas-bg: #262b36; --dot: rgba(220, 228, 241, 0.11); }

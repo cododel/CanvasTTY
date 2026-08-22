@@ -20,7 +20,12 @@ import {
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { UiIcon } from "../../components/UiIcon";
 import { t } from "../../lib/i18n";
-import { AGENT_PROVIDERS, PROVIDERS } from "../../lib/providers";
+import {
+  homeLauncherColumnCount,
+  PROVIDERS,
+  resolveHomeLimitProviders,
+  resolveHomeLauncherProviders
+} from "../../lib/providers";
 import { sessionStatusIcon, sessionStatusLabel } from "../../lib/sessionStatus";
 import { HomeMediaWidget } from "./HomeMediaWidget";
 import { PluginFrame } from "../plugins/PluginFrame";
@@ -113,10 +118,12 @@ export function HomeZone({
   onPluginCanvasWheel
 }: HomeZoneProps): React.JSX.Element {
   const locale = settings.locale;
+  const launcherProviders = resolveHomeLauncherProviders(settings);
+  const limitProviders = resolveHomeLimitProviders(settings);
   const [now, setNow] = useState(() => new Date());
   const home = useMemo(
-    () => selectHomeModel(sessions, limits, limitsLoadState, now.getTime()),
-    [sessions, limits, limitsLoadState, now]
+    () => selectHomeModel(sessions, limits, limitsLoadState, now.getTime(), limitProviders),
+    [sessions, limits, limitsLoadState, now, settings.homeLimitProviders]
   );
   const homeElement = useRef<HTMLElement>(null);
   const layoutPointer = useRef<LayoutPointerState | null>(null);
@@ -266,8 +273,14 @@ export function HomeZone({
   const widgetContent = (widgetId: string): React.ReactNode => {
     if (widgetId === "core.limits") {
       return (
-        <section className="tile agent-overview limits-list" aria-label={t(locale, "modelLimits")}>
-          {home.limitRows.map((row) => (
+        <section
+          className={`tile agent-overview limits-list ${home.limitRows.length >= 4 ? "limits-list--dense" : ""}`}
+          aria-label={t(locale, "modelLimits")}
+          style={{ "--limit-rows": Math.max(home.limitRows.length, 1) } as React.CSSProperties}
+        >
+          {home.limitRows.length === 0 ? (
+            <div className="limits-list__empty">{t(locale, "noVisibleLimits")}</div>
+          ) : home.limitRows.map((row) => (
             <LimitRow key={row.provider} row={row} locale={locale} now={now.getTime()} />
           ))}
         </section>
@@ -315,12 +328,15 @@ export function HomeZone({
     }
     if (widgetId === "core.launcher") {
       return (
-        <section className="tile launcher-dock">
+        <section
+          className="tile launcher-dock"
+          style={{ "--launcher-columns": homeLauncherColumnCount(launcherProviders) } as React.CSSProperties}
+        >
           <button className="launcher-button launcher-button--terminal" type="button" onClick={onOpenTerminal} title={t(locale, "terminal")}>
             <ProviderIcon provider="terminal" size="large" />
           </button>
-          {AGENT_PROVIDERS.map((provider) => (
-            <button className="launcher-button" type="button" key={provider} onClick={() => onOpenAgent(provider)} title={provider}>
+          {launcherProviders.map((provider) => (
+            <button className="launcher-button" type="button" key={provider} onClick={() => onOpenAgent(provider)} title={PROVIDERS[provider].label}>
               <ProviderIcon provider={provider} size="large" />
             </button>
           ))}
@@ -478,7 +494,7 @@ function ClockWidget({ locale, now }: { locale: LocaleId; now: Date }): React.JS
 }
 
 function LimitRow({ row, locale, now }: { row: HomeLimitRow; locale: LocaleId; now: number }): React.JSX.Element {
-  const providerLabel = PROVIDERS[row.provider].label;
+  const providerLabel = PROVIDERS[row.provider].limitsLabel ?? PROVIDERS[row.provider].label;
   const meta = limitMeta(row, locale);
   const stateLabel = row.state === "loading"
     ? t(locale, "limitLoading")

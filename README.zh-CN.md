@@ -21,7 +21,7 @@
 
 | 桌面端 | 界面 | 终端 | 服务商 |
 |:--|:--|:--|:--|
-| **Electron**<br>electron-vite | **React**<br>TypeScript | **xterm.js**<br>node-pty | **Codex**<br>Claude · Kimi |
+| **Electron**<br>electron-vite | **React**<br>TypeScript | **xterm.js**<br>node-pty | **Codex**<br>Claude · Kimi · OpenCode · Hermes · Grok Build |
 
 应用界面目前支持英语和俄语；本文档另提供简体中文版本。
 
@@ -31,7 +31,7 @@
 
 ## Windows 终端与服务商 CLI
 
-在 Windows 上，Terminal 启动器会以干净的 `-NoLogo -NoProfile` 会话打开系统自带的 Windows PowerShell；如果不可用，则回退到 `pwsh` 或 `cmd.exe`。在交给 `node-pty`/ConPTY 之前，CanvasTTY 会先从用户 `PATH`、再从标准的用户级 CLI 目录中，为 Codex、Claude 与 Kimi 解析出具体的 `.exe`、`.com`、`.cmd` 或 `.bat` 启动文件。
+在 Windows 上，Terminal 启动器会以干净的 `-NoLogo -NoProfile` 会话打开系统自带的 Windows PowerShell；如果不可用，则回退到 `pwsh` 或 `cmd.exe`。在交给 `node-pty`/ConPTY 之前，CanvasTTY 会先从用户 `PATH`、再从标准的用户级 CLI 目录中，为 Codex、Claude、Kimi、OpenCode、Hermes 与 Grok Build 解析出具体的 `.exe`、`.com`、`.cmd` 或 `.bat` 启动文件。
 
 CanvasTTY 不会安装服务商 CLI。若某个 CLI 缺失，启动对话框会明确说明未找到的服务商以及已检查的目录。安装所需 CLI 后，请重启 CanvasTTY，让桌面进程读取更新后的环境。
 
@@ -68,7 +68,7 @@ CanvasTTY 已提供带权限模型的静态 GitHub 运行时插件，可扩展 H
 
 ## 面向智能体的内置浏览器
 
-CanvasTTY 已提供核心内置浏览器，而不是插件权限：可信 React 外壳配合 sandboxed Electron `WebContentsView` 标签页，并使用一个持久化 Chromium profile。浏览器可从 HOME 打开，能够恢复安全的 HTTP(S) 标签页，把网站凭据留在 Chromium 内部，管理下载/上传，并向由 CanvasTTY 启动的 Claude Code、Codex 与 Kimi 会话提供类型化 browser action。
+CanvasTTY 已提供核心内置浏览器，而不是插件权限：可信 React 外壳配合 sandboxed Electron `WebContentsView` 标签页，并使用一个持久化 Chromium profile。浏览器可从 HOME 打开，能够恢复安全的 HTTP(S) 标签页，把网站凭据留在 Chromium 内部，管理下载/上传，并向由 CanvasTTY 启动的 Claude Code、Codex、Kimi、OpenCode 与 Hermes 会话提供类型化 browser action。
 
 浏览器卡片与终端共享画布的选中、悬停聚焦、拖动、调整大小和语义缩放模型。Settings 提供智能体访问、标签页恢复、最近下载/活动和浏览器数据清理。智能体通过经过认证的本地 socket 或 named pipe 以及内置 stdio MCP helper 接入；不会开放 TCP 或 remote-debugging port，也不会导出 cookie、密码、认证 header、local storage、任意 JavaScript 或 raw CDP。
 

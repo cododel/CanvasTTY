@@ -32,9 +32,6 @@ import { AgentRegistry } from "./browser/AgentRegistry.ts";
 import type { CanvasNavigationInputController } from "./CanvasNavigationOverride.ts";
 import { BrowserAutomationService, type BrowserPointerResult } from "./browser/BrowserAutomationService.ts";
 import {
-  browserVisibleRectangle
-} from "./browser/BrowserCanvasFreeze.ts";
-import {
   BrowserCanvasCursorController,
   browserCanvasNavigationCursor
 } from "./browser/BrowserCanvasCursor.ts";
@@ -43,7 +40,7 @@ import { BrowserCanvasPointerRouter } from "./browser/BrowserCanvasPointerRouter
 import { BrowserCanvasSinkViewportController } from "./browser/BrowserCanvasSinkViewport.ts";
 import { BrowserAuditStore } from "./browser/BrowserAuditStore.ts";
 import type { BrowserWheelDecision } from "./browser/BrowserCanvasWheel.ts";
-import { normalizeBrowserViewportBounds } from "./browser/BrowserViewport.ts";
+import { clipBrowserViewportBounds, normalizeBrowserViewportBounds } from "./browser/BrowserViewport.ts";
 import { BrowserCore, type BrowserCoreHost, type BrowserCoreTab } from "./browser/BrowserCore.ts";
 import { BrowserKernelError } from "./browser/BrowserErrors.ts";
 import {
@@ -1006,7 +1003,7 @@ export class BrowserService {
     }
     this.observeOwner(owner);
     const content = owner.getContentBounds();
-    const visibleRectangle = browserVisibleRectangle(this.viewport, content);
+    const visibleRectangle = clipBrowserViewportBounds(this.viewport, content);
     const left = visibleRectangle?.x ?? 0;
     const top = visibleRectangle?.y ?? 0;
     const right = left + (visibleRectangle?.width ?? 0);

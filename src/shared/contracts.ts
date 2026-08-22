@@ -1,9 +1,12 @@
-export type ProviderId = "terminal" | "codex" | "claude" | "kimi";
+export type ProviderId = "terminal" | "codex" | "claude" | "kimi" | "opencode" | "hermes" | "grok";
 export type AgentProviderId = Exclude<ProviderId, "terminal">;
+export type LimitProviderId = Extract<AgentProviderId, "codex" | "claude" | "kimi" | "opencode" | "grok">;
 export type LaunchProfileId = "normal" | "yolo";
 export type SessionStatus = "idle" | "working" | "needs_approval" | "done" | "failed";
 export type PaletteId = "sage" | "lilac" | "night";
-export type CanvasPatternId = "dots" | "grid" | "waves" | "none";
+export type HomeAccentPresetId = "classic" | "warm" | "cool" | "mono" | "custom";
+export type CanvasColorId = "sage" | "lilac" | "night" | "sand" | "mist" | "rose" | "slate";
+export type CanvasPatternId = "dots" | "grid" | "waves" | "diagonal" | "rings" | "none";
 export type LocaleId = "ru" | "en";
 export type MediaFit = "cover" | "contain";
 export type EdgePanSpeed = "slow" | "normal" | "fast";
@@ -12,6 +15,22 @@ export type CanvasWheelCaptureMode = "off" | "always" | "key";
 export type BrowserViewportSurface = "native" | "placeholder" | "hidden";
 export type FocusActivation = "off" | "single" | "double";
 export type ShortcutAction = "home" | "renameWindow";
+
+export interface HomeAccentColors {
+  clock: string;
+  launcher: string;
+  browser: string;
+  settings: string;
+  media: string;
+}
+
+export const DEFAULT_HOME_ACCENT_COLORS: HomeAccentColors = {
+  clock: "#D8E1C5",
+  launcher: "#B8CF99",
+  browser: "#9CC7DC",
+  settings: "#D5A2C9",
+  media: "#D5A2C9"
+};
 
 export const HOME_GRID_MIN_COLUMNS = 12;
 export const HOME_GRID_MIN_ROWS = 8;
@@ -88,6 +107,11 @@ export interface CameraState extends Point {
 export interface AppSettings {
   locale: LocaleId;
   palette: PaletteId;
+  homeAccentPreset: HomeAccentPresetId;
+  homeAccentColors: HomeAccentColors;
+  homeLauncherProviders: AgentProviderId[];
+  homeLimitProviders: LimitProviderId[];
+  canvasColor: CanvasColorId;
   pattern: CanvasPatternId;
   snapToGrid: boolean;
   invertTerminalWheel: boolean;
@@ -369,10 +393,16 @@ export interface PluginPlaylistFile {
 
 export interface BrowserCanvasState extends SessionBounds {}
 
+export interface BrowserViewportClipBounds extends Size {
+  x: number;
+  y: number;
+}
+
 export interface BrowserViewportBounds extends Size {
   x: number;
   y: number;
   surface: BrowserViewportSurface;
+  clipBounds?: BrowserViewportClipBounds;
   canvasScale?: number;
   showAgentPresence?: boolean;
 }
@@ -385,6 +415,9 @@ export const BROWSER_PROVIDER_COLORS: Record<BrowserAgentProvider, string> = {
   claude: "#D97757",
   codex: "#10A37F",
   kimi: "#7C5CFC",
+  opencode: "#5A5858",
+  hermes: "#D6A700",
+  grok: "#111111",
   unknown: "#7A8291"
 };
 
@@ -653,7 +686,12 @@ export interface BrowserActivityStateEvent {
   event: BrowserActivityEvent;
 }
 
-export type LimitSource = "codex-app-server" | "claude-usage-api" | "kimi-usage-api";
+export type LimitSource =
+  | "codex-app-server"
+  | "claude-usage-api"
+  | "kimi-usage-api"
+  | "opencode-go-usage-api"
+  | "grok-billing-api";
 export type LimitUnavailableReason =
   | "cli-not-found"
   | "not-authenticated"

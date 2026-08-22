@@ -6,6 +6,7 @@ import type {
   BrowserSnapshot,
   CameraState,
   GithubPluginSearchResult,
+  HomeAccentColors,
   HomeGridSize,
   HomeWidgetPlacement,
   InstalledPlugin,
@@ -24,6 +25,7 @@ import type {
   WindowState
 } from "../../shared/contracts";
 import {
+  DEFAULT_HOME_ACCENT_COLORS,
   DEFAULT_HOME_GRID_SIZE,
   DEFAULT_HOME_LAYOUT,
   DEFAULT_SHORTCUTS
@@ -32,6 +34,7 @@ import { TitleBar } from "./components/TitleBar";
 import { Toast } from "./components/Toast";
 import { AgentLaunchDialog } from "./features/launcher/AgentLaunchDialog";
 import { SettingsPanel } from "./features/settings/SettingsPanel";
+import { resolveAppearanceSettings } from "./features/settings/appearanceSettings";
 import { persistSettingsUpdate } from "./features/settings/persistSettings";
 import { PluginBrowserOpenQueue } from "./features/plugins/PluginBrowserOpenQueue";
 import { WorkspaceCanvas } from "./features/workspace/WorkspaceCanvas";
@@ -48,6 +51,11 @@ interface HomeEditDraft {
 const FALLBACK_SETTINGS: AppSettings = {
   locale: "ru",
   palette: "sage",
+  homeAccentPreset: "classic",
+  homeAccentColors: { ...DEFAULT_HOME_ACCENT_COLORS },
+  homeLauncherProviders: ["codex", "claude", "kimi", "opencode", "hermes", "grok"],
+  homeLimitProviders: ["codex", "claude", "kimi", "opencode", "grok"],
+  canvasColor: "sage",
   pattern: "dots",
   snapToGrid: true,
   invertTerminalWheel: true,
@@ -88,6 +96,51 @@ const EMPTY_BROWSER_SNAPSHOT: BrowserSnapshot = {
 
 const DEFAULT_FOCUS_ZOOM = 0.92;
 const PLUGIN_CANVAS_FOCUS_ZOOM = 1;
+
+function customHomeAccentStyle(colors: HomeAccentColors): React.CSSProperties {
+  const launcherTile = mixHexWithWhite(colors.launcher, 0.62);
+  return {
+    "--home-clock": colors.clock,
+    "--home-clock-text": readableTextColor(colors.clock),
+    "--home-launcher-dock": colors.launcher,
+    "--home-launcher-tile": launcherTile,
+    "--home-launcher-text": readableTextColor(launcherTile),
+    "--home-browser": colors.browser,
+    "--home-browser-text": readableTextColor(colors.browser),
+    "--home-settings": colors.settings,
+    "--home-settings-text": readableTextColor(colors.settings),
+    "--home-media": colors.media,
+    "--home-media-text": readableTextColor(colors.media)
+  } as React.CSSProperties;
+}
+
+function mixHexWithWhite(hex: string, sourceWeight: number): string {
+  const channels = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16));
+  return `#${channels.map((channel) => (
+    Math.round(channel * sourceWeight + 255 * (1 - sourceWeight)).toString(16).padStart(2, "0")
+  )).join("")}`.toUpperCase();
+}
+
+function readableTextColor(hex: string): "#30313D" | "#FFFFFF" {
+  const background = relativeLuminance(hex);
+  const darkContrast = contrastRatio(background, relativeLuminance("#30313D"));
+  const lightContrast = contrastRatio(background, 1);
+  return darkContrast >= lightContrast ? "#30313D" : "#FFFFFF";
+}
+
+function relativeLuminance(hex: string): number {
+  const channels = [1, 3, 5].map((offset) => {
+    const value = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+}
+
+function contrastRatio(left: number, right: number): number {
+  const brightest = Math.max(left, right);
+  const darkest = Math.min(left, right);
+  return (brightest + 0.05) / (darkest + 0.05);
+}
 
 export function App(): React.JSX.Element {
   const [settings, setSettings] = useState(FALLBACK_SETTINGS);
@@ -692,14 +745,23 @@ export function App(): React.JSX.Element {
     return () => window.removeEventListener("keydown", handleShortcut, true);
   }, [activeSessionId, goHome, settings.locale, settings.shortcuts, showToast]);
 
+  const appearance = resolveAppearanceSettings(settings);
   const rootClasses = useMemo(
     () => [
       "app",
       `app--${settings.palette}`,
+      `app--home-${appearance.homeAccentPreset}`,
+      `app--canvas-${appearance.canvasColor}`,
       windowState.isMacOS ? "app--macos" : "",
       windowState.isMacOS && windowState.fullscreen ? "app--macos-fullscreen" : ""
     ].filter(Boolean).join(" "),
-    [settings.palette, windowState.fullscreen, windowState.isMacOS]
+    [appearance.canvasColor, appearance.homeAccentPreset, settings.palette, windowState.fullscreen, windowState.isMacOS]
+  );
+  const rootStyle = useMemo(
+    () => appearance.homeAccentPreset === "custom"
+      ? customHomeAccentStyle(appearance.homeAccentColors)
+      : undefined,
+    [appearance.homeAccentColors, appearance.homeAccentPreset]
   );
   const workspaceSettings = useMemo(() => homeEditDraft ? {
     ...settings,
@@ -708,7 +770,7 @@ export function App(): React.JSX.Element {
   } : settings, [homeEditDraft, settings]);
 
   return (
-    <div className={rootClasses}>
+    <div className={rootClasses} style={rootStyle}>
       <TitleBar locale={settings.locale} windowState={windowState} onWindowStateChange={setWindowState} />
       <main className="app__content">
         {!ready && <div className="loading-screen">{t(settings.locale, "loading")}</div>}

@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { parse as parseYaml } from "yaml";
 
 import {
   APPROVED_BROWSER_TOOL_NAMES,
@@ -39,6 +40,24 @@ test("helper accepts only local socket and named-pipe endpoints", () => {
     CANVASTTY_AGENT_PROVIDER: "codex",
     CANVASTTY_AGENT_CAPABILITY: "token"
   }, "linux"), (error) => error instanceof BridgeClientError && error.code === "AUTH_INVALID");
+
+  assert.equal(readIdentity({
+    CANVASTTY_AGENT_BROWSER_ADDRESS: "/tmp/canvastty.sock",
+    CANVASTTY_AGENT_ID: "agent",
+    CANVASTTY_AGENT_CONNECTION_ID: "connection",
+    CANVASTTY_TERMINAL_SESSION_ID: "terminal",
+    CANVASTTY_AGENT_PROVIDER: "opencode",
+    CANVASTTY_AGENT_CAPABILITY: "token"
+  }, "linux").provider, "opencode");
+
+  assert.equal(readIdentity({
+    CANVASTTY_AGENT_BROWSER_ADDRESS: "/tmp/canvastty.sock",
+    CANVASTTY_AGENT_ID: "agent",
+    CANVASTTY_AGENT_CONNECTION_ID: "connection",
+    CANVASTTY_TERMINAL_SESSION_ID: "terminal",
+    CANVASTTY_AGENT_PROVIDER: "hermes",
+    CANVASTTY_AGENT_CAPABILITY: "token"
+  }, "linux").provider, "hermes");
 });
 
 test("MCP initialize authenticates the gateway and returns fixed provider-neutral instructions", async () => {
@@ -155,6 +174,22 @@ test("PTY bridge keeps the one-time capability in child env only and honors the 
   launch.cleanup();
   assert.deepEqual(revoked, ["terminal-id"]);
 
+  const openCodeLaunch = bridge.prepareLaunch({
+    terminalSessionId: "terminal-opencode",
+    provider: "opencode",
+    cwd: "/tmp/project"
+  });
+  const openCodeConfig = JSON.parse(openCodeLaunch.environment.OPENCODE_CONFIG_CONTENT);
+  assert.equal(openCodeLaunch.environment[AGENT_BROWSER_ENV.provider], "opencode");
+  assert.deepEqual(openCodeConfig.mcp.canvastty_browser.command, [
+    "/usr/bin/node",
+    "/app/mcp-helper.mjs"
+  ]);
+  assert.equal(JSON.stringify(openCodeConfig).includes("one-time-secret-token"), false);
+  assert.equal(JSON.stringify(openCodeConfig).includes("terminal-opencode"), false);
+  openCodeLaunch.cleanup();
+  assert.deepEqual(revoked, ["terminal-id", "terminal-opencode"]);
+
   bridge.setEnabled(false);
   assert.equal(bridge.isEnabled, false);
   assert.equal(bridge.prepareLaunch({ terminalSessionId: "disabled", provider: "codex", cwd: "/tmp" }), null);
@@ -202,6 +237,51 @@ test("PTY bridge retains temporary Kimi configuration until session cleanup", as
 
   launch.cleanup();
   await assert.rejects(readFile(mcpPath, "utf8"), (error) => error?.code === "ENOENT");
+});
+
+test("PTY bridge gives Hermes environment placeholders and restores config on cleanup", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "canvastty-hermes-session-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const hermesHomeDirectory = join(root, "hermes-home");
+  const revoked = [];
+  const gateway = {
+    isEnabled: true,
+    setEnabled(value) { this.isEnabled = value; },
+    registerAgent(input) {
+      return {
+        agentId: "agent-id",
+        connectionId: "connection-id",
+        terminalSessionId: input.terminalSessionId,
+        provider: input.provider,
+        capabilityToken: "one-time-secret-token",
+        address: "/tmp/canvastty.sock",
+        authenticated: new Promise(() => {})
+      };
+    },
+    revokeTerminalSession(id) { revoked.push(id); }
+  };
+  const bridge = new AgentBrowserBridge(gateway, {
+    helper: { command: "/usr/bin/node", args: ["/app/mcp-helper.mjs"] },
+    runtimeDirectory: join(root, "runtime"),
+    hermesHomeDirectory,
+    kimiHomeDirectory: join(root, "kimi-home")
+  });
+  const launch = bridge.prepareLaunch({
+    terminalSessionId: "terminal-hermes",
+    provider: "hermes",
+    cwd: "/tmp/project"
+  });
+  const configPath = join(hermesHomeDirectory, "config.yaml");
+  const rawConfig = await readFile(configPath, "utf8");
+  const config = parseYaml(rawConfig);
+
+  assert.equal(launch.environment[AGENT_BROWSER_ENV.capabilityToken], "one-time-secret-token");
+  assert.equal(config.mcp_servers.canvastty_browser.env.CANVASTTY_AGENT_CAPABILITY, "${CANVASTTY_AGENT_CAPABILITY}");
+  assert.equal(rawConfig.includes("one-time-secret-token"), false);
+
+  launch.cleanup();
+  await assert.rejects(readFile(configPath, "utf8"), (error) => error?.code === "ENOENT");
+  assert.deepEqual(revoked, ["terminal-hermes"]);
 });
 
 test("terminal base environment never inherits a foreign CanvasTTY browser capability", () => {

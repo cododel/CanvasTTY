@@ -46,7 +46,9 @@ test("native Browser layout remains a BrowserService responsibility", async () =
   ]);
 
   assert.doesNotMatch(card, /canvasMoving|manipulating|browser-card__motion-surface/);
-  assert.match(card, /const rect = element\.getBoundingClientRect\(\);\s*const state = viewportState\.current;\s*window\.canvasTTY\.browser\.setViewport/);
+  assert.match(card, /const rect = element\.getBoundingClientRect\(\);\s*const clipRect = element\.closest<HTMLElement>\("\.workspace"\)\?\.getBoundingClientRect\(\);/);
+  assert.match(card, /clipBounds: \{/);
+  assert.match(service, /clipBrowserViewportBounds\(this\.viewport, content\)/);
   assert.match(service, /if \(this\.clipTabId !== active\.id\)/);
   assert.match(service, /this\.applyPageScale\(active\)/);
   assert.match(service, /contents\.setZoomFactor\(pageScale\)/);

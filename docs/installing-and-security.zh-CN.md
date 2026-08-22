@@ -25,7 +25,8 @@
 | 数据 | 位置与生命周期 |
 |:--|:--|
 | CanvasTTY 设置 | Electron 的每用户 `userData` 目录（典型 Linux 桌面为 `~/.config/canvastty`，Windows 为 `%APPDATA%\canvastty`，macOS 为 `~/Library/Application Support/canvastty`） |
-| 服务商凭据 | 由已安装的 Codex、Claude 或 Kimi CLI 自己管理的本地凭据存储，CanvasTTY 不会复制它 |
+| 服务商凭据 | 由已安装的 Codex、Claude、Kimi、OpenCode、Hermes 或 Grok Build CLI 自己管理的本地凭据存储，CanvasTTY 不会复制它 |
+| 临时服务商浏览器桥接 | Kimi fallback 与 Hermes MCP 配置项带有 journal，只属于活动的 CanvasTTY 会话，并在最后一个 PTY 退出时恢复，或在启动中断后进行修复；capability 机密绝不会以字面值写入 |
 | PTY 滚动缓冲区 | 应用会话存续期间主进程中的有界内存，不会写入仓库 |
 | Home 媒体 | 用户磁盘上的原始本地文件，设置中只保存它的本地路径 |
 | Runtime 插件 | `userData/plugins` 下的静态包和启用状态；`userData/plugin-storage` 下的隔离 JSON 存储限制为每个插件 64 KB，并在卸载时删除 |

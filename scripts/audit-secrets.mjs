@@ -8,6 +8,7 @@ const IGNORED_ENTRY_NAMES = new Set([
   ".agents",
   ".codex",
   ".planning",
+  "graphify-out",
   "node_modules",
   "out",
   "dist",

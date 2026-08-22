@@ -2,6 +2,14 @@
 
 [English](CHANGELOG.md) · [Русский](CHANGELOG.ru.md) · [简体中文](CHANGELOG.zh-CN.md)
 
+## 1.2.5
+
+- Added OpenCode, Hermes, and Grok Build as first-class launchers on Linux, macOS, and Windows, with official provider marks, native per-launch YOLO behavior, Windows discovery, plugin SDK coverage, and scoped built-in browser MCP integration where supported.
+- Added an independent **Agents** settings section: launcher visibility and HOME limit visibility are persisted separately, hidden launchers leave existing sessions untouched, and the HOME dock automatically redistributes visible buttons.
+- Added source-backed OpenCode Go and Grok Build usage adapters alongside Codex, Claude, and Kimi. The five-row HOME limits tile now switches to compact, height-aware geometry so every countdown and usage rail stays inside its default bounds.
+- Expanded Appearance with independent HOME accent presets/custom colors and Canvas background colors, plus diagonal and ring patterns. Canvas colors no longer recolor HOME widgets, and the Settings top strip remains visually separated from scrolling content.
+- Fixed native Browser viewport clipping so embedded pages stay inside the usable workspace instead of covering application chrome, and added visible DEV/release build identity with normalized provider marks.
+
 ## 1.2.4
 
 - macOS bundles are now explicitly ad-hoc signed with hardened runtime and notarization disabled for the free distribution path; the release workflow runs strict `codesign` verification before uploading artifacts.

@@ -2,6 +2,14 @@
 
 [English](CHANGELOG.md) · [Русский](CHANGELOG.ru.md) · [简体中文](CHANGELOG.zh-CN.md)
 
+## 1.2.5
+
+- OpenCode、Hermes 与 Grok Build 现已成为 Linux、macOS 和 Windows 上的一等 launcher：包含官方 provider mark、仅作用于本次启动的原生 YOLO 行为、Windows CLI 发现、plugin SDK 覆盖，以及在服务商支持时提供的受限内置浏览器 MCP 集成。
+- Settings 新增独立的 **智能体** 分区：launcher 可见性与 HOME 限额行可见性分别持久化；隐藏 launcher 不影响现有会话，HOME dock 会自动重新分配可见按钮的宽度。
+- 在 Codex、Claude、Kimi 的真实限额之外，新增有真实来源的 OpenCode Go 与 Grok Build usage adapter。五行 HOME 限额 tile 会按实际高度切换到紧凑密度，确保每个倒计时与 usage rail 都位于默认边界内。
+- Appearance 新增相互独立的 HOME accent preset/自定义颜色与 Canvas 背景颜色，并加入对角线和圆环图案。Canvas 颜色不再重绘 HOME widget，Settings 顶部条也会与滚动内容保持清晰分层。
+- 修复原生 Browser viewport 裁剪：嵌入页面始终留在可用 workspace 内，不会覆盖应用 chrome；同时加入可见的 DEV/release build 标识并规范 provider mark 的显示。
+
 ## 1.2.4
 
 - macOS bundle 现在会为免费分发路径显式进行 ad-hoc 签名，并关闭 hardened runtime 与 notarization；发布 workflow 会在上传产物前执行严格的 `codesign` 验证。

@@ -37,6 +37,22 @@ test("AgentRegistry follows tab/cursor heartbeats and expires presence at 15 sec
   assert.deepEqual(registry.snapshot(), []);
 });
 
+test("AgentRegistry assigns the OpenCode identity and official mark color", () => {
+  const registry = new AgentRegistry(() => 1_000);
+  registry.touch({ ...actor, provider: "opencode", connectionId: "opencode-connection" }, "tab-1");
+  const presence = registry.forTab("tab-1")[0];
+  assert.equal(presence.label, "OpenCode");
+  assert.equal(presence.brandColor, "#5A5858");
+});
+
+test("AgentRegistry assigns the Hermes identity and provider color", () => {
+  const registry = new AgentRegistry(() => 1_000);
+  registry.touch({ ...actor, provider: "hermes", connectionId: "hermes-connection" }, "tab-1");
+  const presence = registry.forTab("tab-1")[0];
+  assert.equal(presence.label, "Hermes");
+  assert.equal(presence.brandColor, "#D6A700");
+});
+
 test("bounded screenshot base64 plus its JSON envelope fits the 512 KiB bridge", () => {
   const result = {
     v: 1,

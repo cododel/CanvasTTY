@@ -18,7 +18,7 @@
 
 | Настройка | Поведение |
 |:--|:--|
-| **Доступ агентов** | Разрешает сессиям Claude Code, Codex и Kimi, запущенным через CanvasTTY, использовать типизированные browser tools; по умолчанию включено |
+| **Доступ агентов** | Разрешает сессиям Claude Code, Codex, Kimi, OpenCode и Hermes, запущенным через CanvasTTY, использовать типизированные browser tools; по умолчанию включено |
 | **Индикаторы агентов** | Показывает badges после реальной browser-команды агента и cursor только после появления настоящей pointer position; по умолчанию включено |
 | **Восстанавливать вкладки** | Сохраняет порядок вкладок, активную вкладку и безопасные restore URL; по умолчанию включено |
 | **Загрузки** | Показывает до шести последних загрузок, локальный прогресс и статус |
@@ -29,7 +29,7 @@
 
 ## Доступ агентов
 
-Только agent-сессии, запущенные CanvasTTY, получают отдельное browser-подключение на время запуска. Main process передаёт одноразовую bootstrap capability через child environment встроенному stdio MCP helper. После успешной аутентификации она заменяется session-scoped reconnect capability, которая хранится только в памяти helper; повторная bootstrap-аутентификация разрешена лишь пока тот же запуск уже подключён, а завершение PTY отзывает весь доступ. В Linux/macOS используется Unix socket текущего пользователя; в Windows — встроенный native named-pipe host с DACL только для точного SID текущего пользователя. Само подключение и heartbeat не помечают агента активным в браузере: presence начинается с его первой browser-команды.
+Только agent-сессии, запущенные CanvasTTY, получают отдельное browser-подключение на время запуска. Main process передаёт одноразовую bootstrap capability через child environment встроенному stdio MCP helper. Claude и Codex получают per-run CLI arguments, OpenCode — временную MCP-запись через `OPENCODE_CONFIG_CONTENT`, Kimi — per-run файл или восстанавливаемую временную конфигурацию, а Hermes — восстанавливаемую временную запись `mcp_servers.canvastty_browser`, чьи capability-поля ссылаются на окружение дочернего процесса. После успешной аутентификации capability заменяется session-scoped reconnect capability, которая хранится только в памяти helper; повторная bootstrap-аутентификация разрешена лишь пока тот же запуск уже подключён, а завершение PTY отзывает весь доступ. В Linux/macOS используется Unix socket текущего пользователя; в Windows — встроенный native named-pipe host с DACL только для точного SID текущего пользователя. Само подключение и heartbeat не помечают агента активным в браузере: presence начинается с его первой browser-команды.
 
 Набор tools покрывает вкладки, навигацию, observe/read, screenshot, click/hover/type/select/press, scroll/drag, ожидания, dialogs, downloads и activity вызывающего агента. Он не открывает cookies, сохранённые пароли, authorization headers, local/session storage, произвольный JavaScript, filesystem/shell, raw CDP, TCP listener или remote-debugging port.
 

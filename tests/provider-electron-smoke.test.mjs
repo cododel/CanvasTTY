@@ -6,6 +6,7 @@ import {
 } from "../src/main/services/browser/ProviderElectronSmoke.ts";
 
 const expectedTool = "mcp__canvastty_browser__browser_list_tabs";
+const openCodeExpectedTool = "canvastty_browser_browser_list_tabs";
 const browserResult = JSON.stringify({
   ok: true,
   requestId: "provider-smoke-request",
@@ -47,6 +48,35 @@ test("Codex provider transcript deduplicates started and completed events for on
     { type: "turn.completed", final_output: "CANVASTTY_PROVIDER_SMOKE_OK" }
   ]);
   assert.doesNotThrow(() => assertProviderTranscript("codex", transcript));
+});
+
+test("OpenCode provider transcript requires one completed CanvasTTY tool part", () => {
+  const toolPart = {
+    id: "part-1",
+    messageID: "message-1",
+    sessionID: "session-1",
+    type: "tool",
+    callID: "call-1",
+    tool: openCodeExpectedTool,
+    state: { status: "completed", input: {}, output: browserResult }
+  };
+  const transcript = jsonl([
+    { type: "tool_use", sessionID: "session-1", part: toolPart },
+    {
+      type: "text",
+      sessionID: "session-1",
+      part: { type: "text", text: "CANVASTTY_PROVIDER_SMOKE_OK" }
+    }
+  ]);
+  assert.doesNotThrow(() => assertProviderTranscript("opencode", transcript));
+});
+
+test("Hermes one-shot transcript must contain only the exact final marker", () => {
+  assert.doesNotThrow(() => assertProviderTranscript("hermes", "CANVASTTY_PROVIDER_SMOKE_OK\n"));
+  assert.throws(
+    () => assertProviderTranscript("hermes", "extra\nCANVASTTY_PROVIDER_SMOKE_OK\n"),
+    /exact marker/u
+  );
 });
 
 test("Kimi transcript rejects a model-printed BrowserResult when the correlated tool result failed", () => {
@@ -172,6 +202,17 @@ test("provider argv keeps approval scoped and disables unrelated Claude configur
   const kimi = providerSmokeArguments("kimi", launchArgs, "/tmp/smoke");
   assert.equal(kimi.includes("--yolo"), false);
   assert.equal(optionValue(kimi, "--output-format"), "stream-json");
+
+  const opencode = providerSmokeArguments("opencode", launchArgs, "/tmp/smoke");
+  assert.equal(opencode[0], "run");
+  assert.equal(optionValue(opencode, "--format"), "json");
+  assert.equal(optionValue(opencode, "--dir"), "/tmp/smoke");
+  assert.equal(opencode.includes("--dangerously-skip-permissions"), false);
+
+  const hermes = providerSmokeArguments("hermes", launchArgs, "/tmp/smoke");
+  assert.deepEqual(hermes.slice(0, 2), ["--provider-launch-marker", "-z"]);
+  assert.equal(hermes.includes("--yolo"), false);
+  assert.match(hermes.at(-1), /mcp__canvastty_browser__browser_list_tabs/u);
 });
 
 function jsonl(events) {

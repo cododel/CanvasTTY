@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   normalizeClaudeLimits,
   normalizeCodexLimits,
+  normalizeGrokLimits,
+  normalizeOpenCodeGoLimits,
   normalizeKimiLimits
 } from "../src/main/services/LimitsService.ts";
 
@@ -93,4 +95,58 @@ test("normalizes Kimi weekly and rolling usage without exposing account metadata
     { id: "kimi:weekly", usedPercent: 36, used: 36, limit: 100, windowMinutes: 10_080 },
     { id: "kimi:rolling:300:0", usedPercent: 12, used: 12, limit: 100, windowMinutes: 300 }
   ]);
+});
+
+test("normalizes every real OpenCode Go usage window", () => {
+  const windows = normalizeOpenCodeGoLimits({
+    usage: {
+      rolling: { percent: 12.5, resetsAt: "2026-08-21T12:00:00Z", status: "active" },
+      weekly: { percent: 34, resetsAt: "2026-08-27T12:00:00Z", status: "active" },
+      monthly: { percent: 56, resetsAt: "2026-09-01T00:00:00Z", status: "active" }
+    }
+  });
+
+  assert.deepEqual(windows.map((window) => ({
+    id: window.id,
+    usedPercent: window.usedPercent,
+    windowMinutes: window.windowMinutes,
+    resetsAt: window.resetsAt
+  })), [
+    { id: "opencode-go:rolling", usedPercent: 12.5, windowMinutes: 300, resetsAt: Date.parse("2026-08-21T12:00:00Z") },
+    { id: "opencode-go:weekly", usedPercent: 34, windowMinutes: 10_080, resetsAt: Date.parse("2026-08-27T12:00:00Z") },
+    { id: "opencode-go:monthly", usedPercent: 56, windowMinutes: null, resetsAt: Date.parse("2026-09-01T00:00:00Z") }
+  ]);
+});
+
+test("normalizes Grok Build's real shared billing period", () => {
+  const [window] = normalizeGrokLimits({
+    config: {
+      creditUsagePercent: 43,
+      currentPeriod: {
+        start: "2026-08-17T00:00:00Z",
+        end: "2026-08-24T00:00:00Z",
+        type: "WEEKLY"
+      },
+      productUsage: { ignored: true }
+    }
+  });
+
+  assert.deepEqual(window, {
+    id: "grok:weekly",
+    bucketId: "grok",
+    slot: "secondary",
+    isDefaultBucket: true,
+    label: "1w",
+    usedPercent: 43,
+    used: null,
+    limit: null,
+    windowMinutes: 10_080,
+    resetsAt: Date.parse("2026-08-24T00:00:00Z")
+  });
+});
+
+test("does not invent OpenCode Go or Grok Build usage from unrelated payloads", () => {
+  assert.throws(() => normalizeOpenCodeGoLimits({ unrelated: true }));
+  assert.deepEqual(normalizeOpenCodeGoLimits({ usage: {} }), []);
+  assert.deepEqual(normalizeGrokLimits({ config: { currentPeriod: {} } }), []);
 });

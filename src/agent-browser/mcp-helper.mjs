@@ -429,7 +429,7 @@ export function readIdentity(environment = process.env, platform = process.platf
       retryable: false
     });
   }
-  if (!["claude", "codex", "kimi"].includes(identity.provider)) {
+  if (!["claude", "codex", "kimi", "opencode", "hermes"].includes(identity.provider)) {
     throw new BridgeClientError({ code: "AUTH_INVALID", message: "Unknown CanvasTTY agent provider.", retryable: false });
   }
   return identity;

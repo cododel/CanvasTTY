@@ -18,7 +18,7 @@ CanvasTTY `1.0.2` 已从 HOME 提供内置浏览器，它是可信的画布应�
 
 | 设置 | 行为 |
 |:--|:--|
-| **智能体访问** | 允许由 CanvasTTY 启动的 Claude Code、Codex 和 Kimi 会话使用类型化浏览器工具；默认开启 |
+| **智能体访问** | 允许由 CanvasTTY 启动的 Claude Code、Codex、Kimi、OpenCode 和 Hermes 会话使用类型化浏览器工具；默认开启 |
 | **智能体指示器** | 智能体实际执行 browser command 后显示 badge，获得真实 pointer position 后才显示 cursor；默认开启 |
 | **恢复标签页** | 保存标签顺序、活动标签和安全的恢复 URL；默认开启 |
 | **下载** | 显示最近六项下载及其本地进度/状态 |
@@ -29,7 +29,7 @@ CanvasTTY `1.0.2` 已从 HOME 提供内置浏览器，它是可信的画布应�
 
 ## 智能体访问
 
-只有 CanvasTTY 启动的智能体会话会获得本次启动专属的浏览器连接。主进程通过子进程环境把一次性 bootstrap capability 交给内置 stdio MCP helper。认证成功后，它会轮换为仅保存在 helper 内存中的 session-scoped reconnect capability；只有同一次启动仍存在活动连接时才允许重复 bootstrap 认证，PTY 结束时会撤销全部访问。Linux/macOS 使用当前用户的 Unix socket；Windows 使用内置 native named-pipe host，其 DACL 仅包含当前用户的准确 SID。连接与 heartbeat 本身不会把智能体标记为浏览器活跃；presence 从第一次 browser command 开始。
+只有 CanvasTTY 启动的智能体会话会获得本次启动专属的浏览器连接。主进程通过子进程环境把一次性 bootstrap capability 交给内置 stdio MCP helper。Claude 与 Codex 使用 per-run CLI 参数，OpenCode 使用仅本次启动有效的 `OPENCODE_CONFIG_CONTENT` MCP 配置，Kimi 使用 per-run 文件或可恢复的临时配置，Hermes 则获得可恢复的临时 `mcp_servers.canvastty_browser` 配置项，其中 capability 字段引用子进程环境变量。认证成功后，capability 会轮换为仅保存在 helper 内存中的 session-scoped reconnect capability；只有同一次启动仍存在活动连接时才允许重复 bootstrap 认证，PTY 结束时会撤销全部访问。Linux/macOS 使用当前用户的 Unix socket；Windows 使用内置 native named-pipe host，其 DACL 仅包含当前用户的准确 SID。连接与 heartbeat 本身不会把智能体标记为浏览器活跃；presence 从第一次 browser command 开始。
 
 工具面覆盖标签页、导航、observe/read、截图、click/hover/type/select/press、scroll/drag、等待、dialog、下载以及调用智能体自己的活动。它不会暴露 cookie、保存的密码、authorization header、local/session storage、任意 JavaScript、文件系统/shell、raw CDP、TCP listener 或 remote-debugging port。
 

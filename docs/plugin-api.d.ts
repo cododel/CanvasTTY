@@ -11,7 +11,7 @@ export interface CanvasTTYPluginHost {
   request(method: "host.getContext"): Promise<CanvasTTYPluginContext>;
   request(method: "sessions.list"): Promise<CanvasTTYPluginSession[]>;
   request(method: "limits.get"): Promise<CanvasTTYPluginLimitsResult>;
-  request(method: "launcher.open", params: { provider: "terminal" | "codex" | "claude" | "kimi" }): Promise<null>;
+  request(method: "launcher.open", params: { provider: "terminal" | "codex" | "claude" | "kimi" | "opencode" | "hermes" }): Promise<null>;
   request(method: "canvas.open", params: { contributionId: string }): Promise<null>;
   request(method: "external.open", params: { url: string }): Promise<null>;
   request(method: "browser.open", params: { url: string }): Promise<null>;
@@ -76,7 +76,7 @@ export interface CanvasTTYPluginContext {
 
 export interface CanvasTTYPluginSession {
   id: string;
-  provider: "terminal" | "codex" | "claude" | "kimi";
+  provider: "terminal" | "codex" | "claude" | "kimi" | "opencode" | "hermes";
   title: string;
   status: "idle" | "working" | "needs_approval" | "done" | "failed";
   startedAt: number;

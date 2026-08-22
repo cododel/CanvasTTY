@@ -12,7 +12,9 @@ const READY_MARKER = "CANVASTTY_PROVIDER_SMOKE_READY";
 const EXPECTED_TOOL = "mcp__canvastty_browser__browser_list_tabs";
 const MAX_OUTPUT_BYTES = 128 * 1024;
 const targets = parseTargets(process.argv.slice(2));
-const TIMEOUT_MS = targets.includes("claude") || targets.includes("codex") ? 360_000 : 120_000;
+const TIMEOUT_MS = targets.includes("claude") || targets.includes("codex") || targets.includes("opencode") || targets.includes("hermes")
+  ? 360_000
+  : 120_000;
 const smokeRoot = await mkdtemp(join(process.platform === "win32" ? tmpdir() : "/tmp", "ct-provider-"));
 const userDataPath = join(smokeRoot, "electron");
 const kimiHome = join(smokeRoot, "kimi-home");
@@ -77,9 +79,11 @@ function parseTargets(args) {
   if (mode === "--kimi") return ["kimi"];
   if (mode === "--claude") return ["claude"];
   if (mode === "--codex") return ["codex"];
+  if (mode === "--opencode") return ["opencode"];
+  if (mode === "--hermes") return ["hermes"];
   if (mode === "--deterministic") return ["direct", "kimi"];
-  if (mode === "--all") return ["direct", "kimi", "claude", "codex"];
-  throw new Error("Usage: smoke-browser-providers.mjs [--direct|--kimi|--claude|--codex|--deterministic|--all]");
+  if (mode === "--all") return ["direct", "kimi", "claude", "codex", "opencode", "hermes"];
+  throw new Error("Usage: smoke-browser-providers.mjs [--direct|--kimi|--claude|--codex|--opencode|--hermes|--deterministic|--all]");
 }
 
 async function waitForReady(process) {

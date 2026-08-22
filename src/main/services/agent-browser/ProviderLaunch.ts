@@ -27,6 +27,11 @@ import {
   canonicalStringify
 } from "../../../agent-browser/tool-catalog.mjs";
 import { AGENT_BROWSER_ENV, type AgentProvider } from "./protocol.ts";
+import {
+  HermesTemporaryConfiguration,
+  resolveHermesHomeDirectory
+} from "../hermesConfig.ts";
+import { openCodeBrowserEnvironment } from "../openCodeConfig.ts";
 
 const KIMI_RULE_PATTERN = `mcp__${MCP_SERVER_NAME}__*`;
 const CLAUDE_RULE_PATTERN = `mcp__${MCP_SERVER_NAME}__*`;
@@ -43,15 +48,18 @@ export interface StdioHelperLaunch {
 
 export interface PreparedProviderLaunch {
   args: string[];
+  environment: Record<string, string>;
   releaseConfiguration(): void;
 }
 
 export interface ProviderLaunchOptions {
   helper: StdioHelperLaunch;
+  hermesHomeDirectory?: string;
   kimiHomeDirectory?: string;
   runtimeDirectory: string;
   kimiCommand?: string;
   probeKimiPerRunConfig?: (command: string) => boolean;
+  environment?: Readonly<Record<string, string | undefined>>;
 }
 
 interface ConfigurationLockHooks {
@@ -61,34 +69,56 @@ interface ConfigurationLockHooks {
 
 export class ProviderLaunchAdapters {
   private readonly options: ProviderLaunchOptions;
+  private readonly hermesHomeDirectory: string;
   private readonly kimiHomeDirectory: string;
   private readonly kimiCommand: string;
   private readonly probe: (command: string) => boolean;
+  private readonly environment: Readonly<Record<string, string | undefined>>;
   private kimiSupportsPerRunConfig: boolean | null = null;
   private kimiConfiguration: KimiTemporaryConfiguration | null = null;
   private kimiConfigurationUsers = 0;
+  private hermesConfiguration: HermesTemporaryConfiguration | null = null;
+  private hermesConfigurationUsers = 0;
 
   constructor(options: ProviderLaunchOptions) {
     validateStdioHelperLaunch(options.helper);
     this.options = options;
+    this.hermesHomeDirectory = options.hermesHomeDirectory ?? resolveHermesHomeDirectory();
     this.kimiHomeDirectory = validateKimiHomeDirectory(
       options.kimiHomeDirectory ?? join(homedir(), ".kimi-code")
     );
     this.kimiCommand = options.kimiCommand ?? "kimi";
     this.probe = options.probeKimiPerRunConfig ?? probeKimiPerRunMcpConfig;
+    this.environment = options.environment ?? process.env;
   }
 
   prepare(provider: AgentProvider, connectionId: string): PreparedProviderLaunch {
     if (provider === "claude") {
       return {
         args: claudeMcpArgs(this.options.helper),
+        environment: {},
         releaseConfiguration() {}
       };
     }
     if (provider === "codex") {
       return {
         args: codexMcpArgs(this.options.helper),
+        environment: {},
         releaseConfiguration() {}
+      };
+    }
+    if (provider === "opencode") {
+      return {
+        args: [],
+        environment: openCodeBrowserEnvironment(this.options.helper, this.environment),
+        releaseConfiguration() {}
+      };
+    }
+    if (provider === "hermes") {
+      return {
+        args: [],
+        environment: {},
+        releaseConfiguration: this.acquireHermesConfiguration()
       };
     }
     return this.prepareKimi(connectionId);
@@ -96,6 +126,30 @@ export class ProviderLaunchAdapters {
 
   recoverKimiConfiguration(): void {
     KimiTemporaryConfiguration.recover(this.kimiHomeDirectory);
+  }
+
+  recoverHermesConfiguration(): void {
+    HermesTemporaryConfiguration.recover(this.hermesHomeDirectory);
+  }
+
+  private acquireHermesConfiguration(): () => void {
+    if (!this.hermesConfiguration) {
+      this.hermesConfiguration = HermesTemporaryConfiguration.begin({
+        homeDirectory: this.hermesHomeDirectory,
+        helper: this.options.helper
+      });
+    }
+    this.hermesConfigurationUsers += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.hermesConfigurationUsers -= 1;
+      if (this.hermesConfigurationUsers !== 0) return;
+      const configuration = this.hermesConfiguration;
+      this.hermesConfiguration = null;
+      configuration?.cleanup();
+    };
   }
 
   private prepareKimi(connectionId: string): PreparedProviderLaunch {
@@ -119,6 +173,7 @@ export class ProviderLaunchAdapters {
       let released = false;
       return {
         args,
+        environment: {},
         releaseConfiguration: () => {
           if (released) return;
           released = true;

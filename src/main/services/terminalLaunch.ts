@@ -2,10 +2,12 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { win32 } from "node:path";
 import type { ProviderId } from "../../shared/contracts.ts";
+import { openCodeYoloEnvironment } from "./openCodeConfig.ts";
 
 export interface TerminalLaunch {
   command: string;
   args: string[] | string;
+  environment?: Record<string, string>;
 }
 
 interface LaunchResolutionOptions {
@@ -34,28 +36,43 @@ export function resolveTerminalLaunch(
       : { command: environment.SHELL || "/bin/bash", args: ["-l"] };
   }
 
+  const launchEnvironment = profile === "yolo" && provider === "opencode"
+    ? openCodeYoloEnvironment(environment)
+    : undefined;
   const providerArgs = [
-    ...(profile === "yolo" ? dangerousArguments(provider) : []),
+    ...(profile === "yolo" && provider !== "opencode" ? dangerousArguments(provider) : []),
     ...agentBrowserArgs
   ];
-  if (platform !== "win32") return { command: provider, args: providerArgs };
+  if (platform !== "win32") {
+    return {
+      command: provider,
+      args: providerArgs,
+      ...(launchEnvironment ? { environment: launchEnvironment } : {})
+    };
+  }
 
   const homeDirectory = options.homeDirectory ?? homedir();
   const resolved = resolveWindowsProvider(provider, environment, homeDirectory, fileExists);
   if (!WINDOWS_SCRIPT_EXTENSIONS.includes(win32.extname(resolved).toLowerCase())) {
-    return { command: resolved, args: providerArgs };
+    return {
+      command: resolved,
+      args: providerArgs,
+      ...(launchEnvironment ? { environment: launchEnvironment } : {})
+    };
   }
 
   const commandPrompt = resolveWindowsCommandPrompt(environment, fileExists);
   return {
     command: commandPrompt,
-    args: windowsBatchCommandLine(resolved, providerArgs)
+    args: windowsBatchCommandLine(resolved, providerArgs),
+    ...(launchEnvironment ? { environment: launchEnvironment } : {})
   };
 }
 
-function dangerousArguments(provider: Exclude<ProviderId, "terminal">): string[] {
+function dangerousArguments(provider: Exclude<ProviderId, "terminal" | "opencode">): string[] {
   if (provider === "codex") return ["--dangerously-bypass-approvals-and-sandbox"];
   if (provider === "claude") return ["--dangerously-skip-permissions"];
+  if (provider === "grok") return ["--always-approve"];
   return ["--yolo"];
 }
 
@@ -123,6 +140,7 @@ function knownProviderDirectories(
     directories.push(win32.join(localAppData, "Programs", "OpenAI", "Codex", "bin"));
   }
   if (provider === "kimi") directories.push(win32.join(homeDirectory, ".kimi-code", "bin"));
+  if (provider === "grok") directories.push(win32.join(homeDirectory, ".grok", "bin"));
   directories.push(win32.join(homeDirectory, ".local", "bin"));
   const roamingAppData = environment.APPDATA ?? win32.join(homeDirectory, "AppData", "Roaming");
   directories.push(win32.join(roamingAppData, "npm"));
@@ -196,6 +214,7 @@ function uniqueWindowsPaths(paths: string[]): string[] {
 }
 
 function providerLabel(provider: Exclude<ProviderId, "terminal">): string {
+  if (provider === "opencode") return "OpenCode";
   return `${provider[0].toUpperCase()}${provider.slice(1)}`;
 }
 
